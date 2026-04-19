@@ -3389,8 +3389,6 @@ const state = {
   data: null,
   dataSource: 'baked',
   lastUpdated: BAKED_TIMESTAMP,
-  unlocked: false,
-  uploadStatus: '',
   statsPhase: 'regular',
   standings: {},
   lb: { sortKey: 'mvp', sortDir: 'desc', filterCoach: 'All', minGP: 1 },
@@ -3415,54 +3413,6 @@ function activeGameLog(state) {
   if (state.statsPhase === 'regular') return gl.filter(r => r.wk <= 11);
   if (state.statsPhase === 'playoff') return gl.filter(r => r.wk > 11);
   return gl;
-}
-
-function dataUpload(state) {
-  if (!state.unlocked) {
-    const pwInput = el('input', { type: 'password', placeholder: 'Admin password', style: { width: '160px' } });
-    const btn = el('button', {
-      onclick: () => {
-        if (pwInput.value === ADMIN_PASSWORD) { state.unlocked = true; render(state); }
-        else { state.uploadStatus = 'Wrong password'; render(state); }
-      }
-    }, 'Unlock');
-    return el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12px' } }, [
-      pwInput, btn,
-      state.uploadStatus ? el('span', { style: { color: 'var(--color-text-danger)' } }, state.uploadStatus) : null
-    ].filter(x => x));
-  }
-  const fileInput = el('input', { type: 'file', accept: '.json', style: { display: 'none' } });
-  fileInput.onchange = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    try {
-      const text = await file.text();
-      const parsed = JSON.parse(text);
-      if (!parsed.gl || !parsed.ml || !parsed.tl || !parsed.rs) throw new Error('Missing required keys');
-      const ts = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-      const payload = JSON.stringify({ data: parsed, uploadedAt: ts });
-      await window.storage.set('gforceData', payload, true);
-      state.data = decodeAll(parsed);
-      state.dataSource = 'live';
-      state.lastUpdated = ts;
-      state.uploadStatus = '✓ Updated ' + ts;
-      render(state);
-    } catch (err) {
-      state.uploadStatus = 'Error: ' + err.message;
-      render(state);
-    }
-  };
-  const label = el('label', {
-    style: {
-      padding: '7px 14px', border: '0.5px solid var(--color-border-secondary)',
-      borderRadius: 'var(--border-radius-md)', cursor: 'pointer',
-      background: 'var(--color-background-secondary)', fontSize: '12px', fontWeight: '500'
-    }
-  }, ['Upload data.json', fileInput]);
-  return el('div', { style: { display: 'flex', gap: '10px', alignItems: 'center', fontSize: '12px' } }, [
-    label,
-    state.uploadStatus ? el('span', { style: { color: 'var(--color-text-secondary)' } }, state.uploadStatus) : null
-  ].filter(x => x));
 }
 
 function phaseToggle(state) {
@@ -3559,8 +3509,7 @@ function renderRegularSeasonMode(state, root) {
     el('span', {
       style: {
         width: '6px', height: '6px', borderRadius: '50%',
-        background: state.dataSource === 'live' ? 'var(--color-text-success)' : 'var(--color-text-tertiary)',
-        flexShrink: '0'
+        background: 'var(--color-text-success)', flexShrink: '0'
       }
     }),
     'Updated ' + state.lastUpdated
@@ -3598,8 +3547,7 @@ function renderRegularSeasonMode(state, root) {
           showToggle ? phaseToggle(state) : null,
           playoffsBtn
         ].filter(x => x))
-      ]),
-      dataUpload(state)
+      ])
     ])
   ]);
 
@@ -3620,7 +3568,7 @@ function renderRegularSeasonMode(state, root) {
 
   const statState = { ...state, data: { ...state.data, gameLog: activeGameLog(state) } };
   let content;
-  if (state.view === 'standings')   content = viewStandings(statState);
+  if (state.view === 'standings')        content = viewStandings(statState);
   else if (state.view === 'schedule')    content = viewSchedule(state);
   else if (state.view === 'leaderboard') content = viewLeaderboard(statState);
   else if (state.view === 'coach')       content = viewCoachPanel(statState);
@@ -3634,31 +3582,8 @@ function renderRegularSeasonMode(state, root) {
   root.appendChild(content);
 }
 
-async function init() {
-  render(state);
-  try {
-    if (window.storage) {
-      const stored = await window.storage.get('gforceData', true);
-      if (stored && stored.value) {
-        let parsed;
-        try {
-          const envelope = JSON.parse(stored.value);
-          if (envelope.data && envelope.uploadedAt) {
-            parsed = envelope.data;
-            state.lastUpdated = envelope.uploadedAt;
-          } else { parsed = envelope; }
-        } catch (e) { parsed = JSON.parse(stored.value); }
-        if (parsed && parsed.gl && parsed.ml && parsed.tl && parsed.rs) {
-          state.data = decodeAll(parsed);
-          state.dataSource = 'live';
-          render(state);
-          return;
-        }
-      }
-    }
-  } catch (e) { }
+function init() {
   state.data = decodeAll(decompressData(BAKED_DATA_B64));
-  state.dataSource = 'baked';
   render(state);
 }
 
