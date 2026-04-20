@@ -1469,7 +1469,7 @@ function viewHeadToHead(state) {
         const moves = h2hMl
           .filter(m => m.gid === gid && m.coach === coach && m.mon === r.mon)
           .sort((a, b) => b.uses - a.uses)
-          .slice(0, 2)
+
           .map(m => m.move + ' ×' + m.uses);
 
         // Look up actual Tera type from turn log
