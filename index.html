@@ -1,7 +1,7 @@
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
-:root, html, body {
+:root, html, :root {
   --color-background-primary: #13151c;
   --color-background-secondary: #1a1d27;
   --color-background-tertiary: #0e1016;
@@ -166,12 +166,19 @@ function coachStats(gameLog) {
   const seriesMap = {};
   gameLog.forEach(r => {
     const s = stats[r.coach]; if (!s) return;
-    s.gp++; if (r.won) s.gw++; else s.gl++;
+    // Count stats per row (mon-level)
     s.kills += (r.kd||0)+(r.ki||0); s.deaths += r.d||0;
     s.dmg += r.dout||0; s.sw += r.sw||0;
     s.abil += r.abil||0; s.item += r.item||0;
     s.cp += r.cp||0; s.cm += r.cm||0; s.teras += r.tera||0;
-    s.gids.add(r.gid); if (r.won) s.gwGids.add(r.gid);
+    // Count games by unique gid (not rows)
+    if (!s.gids.has(r.gid)) {
+      s.gids.add(r.gid);
+      s.gp++;
+      if (r.won) { s.gw++; s.gwGids.add(r.gid); } else s.gl++;
+    } else {
+      if (r.won) s.gwGids.add(r.gid); // ensure won tracked
+    }
 
     const sid = 'W'+r.wk+'-M'+r.m;
     if (!seriesMap[sid]) seriesMap[sid] = {};
@@ -399,20 +406,36 @@ function computeSuperlatives(gameLog, turnLog, moveLog) {
     const ki = cgl.reduce((s,r)=>s+(r.ki||0),0);
     // Crits
     const crits = cgl.reduce((s,r)=>s+(r.cp||0),0);
+    // Items / abilities / flinches
+    const items = cgl.reduce((s,r)=>s+(r.item||0),0);
+    const abils = cgl.reduce((s,r)=>s+(r.abil||0),0);
+    const flinches = ctl.filter(t=>t.event==='FLINCH').length;
+
+    // Compute additional stats needed for unique superlatives
+    const dmgPerGame = Math.round(cgl.reduce((s,r)=>s+(r.dout||0),0) / Math.max(1,games));
+    const g3series = (() => {
+      const s3 = new Set();
+      cgl.forEach(r => { if ((r.g||0) >= 3) s3.add(r.wk+'-'+r.m); });
+      return s3.size;
+    })();
+    const uniqueLeads = new Set(cgl.filter(r=>r.lead).map(r=>r.mon)).size;
 
     const SUPERLATIVE_MAP = {
-      'Zion':   { label:'Protect wall',        icon:'🛡️', value: protRate+'%',            sub:'of protects actually blocked something' },
-      'Abbey':  { label:'Intimidation king',   icon:'😤', value: intimidate+' triggers',  sub:'most ability-based stat drops in the league' },
-      'Evan':   { label:'Tactical flexibility',icon:'🎯', value: uniqueMons+' mons used', sub:'tied 2nd in roster diversity' },
-      'Gabby':  { label:'Debuff machine',      icon:'📉', value: statDrops+' stat drops', sub:'most move-based stat drops in the league' },
-      'Joe':    { label:'Turtle king',         icon:'🐢', value: protTotal+' protects',   sub:'most protect uses in the league' },
-      'Maddi':  { label:'One-move wonder',     icon:'💚', value: topMove ? topMove[0]+' ×'+topMove[1] : '—', sub:'signature move — highest single-move use count' },
-      'Alec':   { label:'Revolving door',      icon:'🔄', value: switches+' switches',    sub:'most switches in the league, 3.1/game' },
-      'Ben':    { label:'Untouchable',         icon:'💎', value: perfectWins+' shutouts', sub:'games won without losing a single Pokémon' },
-      'Medaya': { label:'Perfect protect',     icon:'🔮', value: protRate+'%',            sub:'protect block rate ('+protBlocked+'/'+protTotal+' attempts)' },
-      'Ale':    { label:'Roster explorer',     icon:'📚', value: uniqueMons+' mons used', sub:'2nd most unique Pokémon brought all season' },
-      'Sam':    { label:'Indirect assassin',   icon:'☠️', value: ki+' indirect kills',   sub:'tied league high — Rocky Helmet & hazard master' },
-      'Rowynn': { label:'Deepest bench',       icon:'🏛️', value: uniqueMons+' mons used',sub:'most unique Pokémon brought — league high' },
+      'Zion':   { label:'Item triggers',     icon:'🎒', value: items+' triggers',         sub:'most item activations in the league' },
+      'Abbey':  { label:'Ability machine',   icon:'😤', value: abils+' activations',      sub:'most ability triggers in the league ('+intimidate+' intimidates)' },
+      'Evan':   { label:'Never blinked',     icon:'😎', value: g3series+' game 3s',       sub:'only coach who has never gone to a deciding game' },
+      'Gabby':  { label:'Debuff machine',    icon:'📉', value: statDrops+' stat drops',   sub:'most move-based stat drops in the league' },
+      'Joe':    { label:'Most lethal',       icon:'💀', value: dmgPerGame+'% per game',   sub:'highest average damage output per game — league high' },
+      'Maddi':  { label:'Drain specialist',  icon:'🌿', value: (() => {
+        const drainMoves = ['Giga Drain','Draining Kiss','Leech Seed','Drain Punch','Horn Leech'];
+        return cml.filter(r=>drainMoves.includes(r.move)).reduce((s,r)=>s+r.uses,0);
+      })()+'  draining uses',   sub:'most healing move uses in the league' },
+      'Alec':   { label:'Iron curtain',      icon:'🏰', value: g3series+' deciding games', sub:'most series that went to game 3 — fearless under pressure' },
+      'Ben':    { label:'Untouchable',       icon:'💎', value: perfectWins+' shutouts',   sub:'games won without losing a single Pokémon' },
+      'Medaya': { label:'Flinch artist',     icon:'😵', value: flinches+' flinches',      sub:'most flinches caused in the league by a wide margin' },
+      'Ale':    { label:'Roster explorer',   icon:'🗺️', value: uniqueMons+' mons used',  sub:'2nd most Pokémon brought — never plays the same team twice' },
+      'Sam':    { label:'Indirect assassin', icon:'☠️', value: ki+' indirect KOs',        sub:'tied league high — lets the field do the dirty work' },
+      'Rowynn': { label:'Deepest bench',     icon:'🏛️', value: uniqueLeads+' unique leads', sub:'most different Pokémon used as leads — league high' },
     };
 
     sups[coach] = SUPERLATIVE_MAP[coach] || { label:'Standout', icon:'⭐', value:'—', sub:'' };
@@ -421,8 +444,8 @@ function computeSuperlatives(gameLog, turnLog, moveLog) {
 }
 
 // ── Weekly Recap ──────────────────────────────────────────────────────────────
-function computeWeeklyRecap(gameLog, moveLog, turnLog) {
-  // Find most recent fully-played week (6 matches)
+function computeWeeklyRecap(gameLog, moveLog, turnLog, targetWk) {
+  // Find all fully-played weeks (6 matches)
   const weekMatches = {};
   gameLog.forEach(r => {
     if (!weekMatches[r.wk]) weekMatches[r.wk] = new Set();
@@ -433,32 +456,37 @@ function computeWeeklyRecap(gameLog, moveLog, turnLog) {
     .map(([wk]) => parseInt(wk))
     .sort((a,b)=>b-a);
   if (!completeWeeks.length) return null;
-  const wk = completeWeeks[0];
+  const wk = targetWk && completeWeeks.includes(targetWk) ? targetWk : completeWeeks[0];
 
   const wgl = gameLog.filter(r=>r.wk===wk);
   const wml = moveLog.filter(r=>r.wk===wk);
   const wtl = turnLog.filter(r=>r.wk===wk);
 
-  // Series results
+  // Series results — count unique game wins, not rows
   const series = {};
   wgl.forEach(r => {
     const sid = 'M'+r.m;
-    if (!series[sid]) series[sid] = {m:r.m, coaches:{}, gameWinners:{}};
-    if (!series[sid].coaches[r.coach]) series[sid].coaches[r.coach]={w:0,l:0,opp:r.opp};
-    if (r.won) { series[sid].coaches[r.coach].w++; if (!series[sid].gameWinners[r.g]) series[sid].gameWinners[r.g]=r.coach; }
-    else series[sid].coaches[r.coach].l++;
+    if (!series[sid]) series[sid] = {m:r.m, opp:{}, gameWinners:{}};
+    if (!series[sid].opp[r.coach]) series[sid].opp[r.coach] = r.opp;
+    // Track game winner by gid (first won=true row per gid wins it)
+    if (r.won && !series[sid].gameWinners[r.gid]) series[sid].gameWinners[r.gid] = r.coach;
   });
 
   const results = Object.values(series).map(s => {
-    const [cA,cB] = Object.keys(s.coaches);
-    const sA = s.coaches[cA], sB = s.coaches[cB];
-    const winner = sA.w > sB.w ? cA : cB;
-    const loser  = sA.w > sB.w ? cB : cA;
-    const wScore = sA.w > sB.w ? sA.w : sB.w;
-    const lScore = sA.w > sB.w ? sB.w : sA.w;
-    const swept = wScore===2&&lScore===0;
-    return {m:s.m, winner, loser, wScore, lScore, swept};
-  }).sort((a,b)=>a.m-b.m);
+    const coaches = Object.keys(s.opp);
+    if (coaches.length !== 2) return null;
+    const [cA, cB] = coaches;
+    const gameResults = Object.values(s.gameWinners);
+    const aW = gameResults.filter(w=>w===cA).length;
+    const bW = gameResults.filter(w=>w===cB).length;
+    const winner = aW >= bW ? cA : cB;
+    const loser  = aW >= bW ? cB : cA;
+    const wScore = Math.max(aW, bW);
+    const lScore = Math.min(aW, bW);
+    const gamesPlayed = Object.keys(s.gameWinners).length;
+    const swept = wScore===2 && lScore===0;
+    return {m:s.m, winner, loser, wScore, lScore, swept, gamesPlayed};
+  }).filter(x=>x).sort((a,b)=>a.m-b.m);
 
   // Week MVP: highest kills + damage among all mons this week
   const monScores = {};
@@ -494,7 +522,7 @@ function computeWeeklyRecap(gameLog, moveLog, turnLog) {
   // Closest series: went to game 3
   const closestSeries = results.filter(r=>r.lScore===1);
 
-  return { wk, results, weekMVP, biggestUpset, mostDominant, closestSeries };
+  return { wk, results, weekMVP, biggestUpset, mostDominant, closestSeries, wgl, wml, wtl };
 }
 
 
@@ -1386,7 +1414,42 @@ function renderPowerRankings(state) {
 
 function renderWeeklyRecap(state) {
   const { data } = state;
-  const recap = computeWeeklyRecap(data.gameLog, data.moveLog, data.turnLog);
+
+  // Week selector — find all complete weeks
+  const weekMatches = {};
+  data.gameLog.forEach(r => {
+    if (!weekMatches[r.wk]) weekMatches[r.wk] = new Set();
+    weekMatches[r.wk].add(r.m);
+  });
+  const completeWeeks = Object.entries(weekMatches)
+    .filter(([, m]) => m.size >= 6)
+    .map(([wk]) => parseInt(wk))
+    .sort((a,b) => a - b);
+
+  const maxWk = completeWeeks.length ? Math.max(...completeWeeks) : 0;
+  const selectedWk = state.standings.recapWeek && completeWeeks.includes(state.standings.recapWeek)
+    ? state.standings.recapWeek : maxWk;
+
+  const weekSelector = completeWeeks.length > 1 ? el('div', {
+    style: { display:'flex', alignItems:'center', gap:'8px', marginBottom:'1rem', flexWrap:'wrap' }
+  }, [
+    el('span', { style: { fontSize:'12px', color:'var(--color-text-tertiary)', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.6px' } }, 'Week:'),
+    ...completeWeeks.map(wk => {
+      const active = wk === selectedWk;
+      return el('button', {
+        onclick: () => { state.standings.recapWeek = wk; render(state); },
+        style: {
+          padding:'5px 12px', fontSize:'12px', fontWeight: active ? '700' : '500',
+          background: active ? 'var(--color-text-primary)' : 'var(--color-background-secondary)',
+          color: active ? 'var(--color-background-primary)' : 'var(--color-text-secondary)',
+          border: '0.5px solid var(--color-border-tertiary)',
+          borderRadius: '999px', cursor: 'pointer', transition: 'all 0.15s'
+        }
+      }, 'W' + wk);
+    })
+  ]) : null;
+
+  const recap = computeWeeklyRecap(data.gameLog, data.moveLog, data.turnLog, selectedWk);
 
   if (!recap) {
     return section('Week Recap', 'No complete weeks yet',
@@ -1394,7 +1457,7 @@ function renderWeeklyRecap(state) {
     );
   }
 
-  const { wk, results, weekMVP, biggestUpset, mostDominant, closestSeries } = recap;
+  const { wk, results, weekMVP, biggestUpset, mostDominant, closestSeries, wgl } = recap;
 
   // Highlight cards
   const highlights = [];
@@ -1467,7 +1530,7 @@ function renderWeeklyRecap(state) {
   const allWekMons = Object.values(wekMons);
   const topKiller = allWekMons.sort((a,b)=>b.tk-a.tk)[0];
   const topDmg    = allWekMons.slice().sort((a,b)=>b.dout-a.dout)[0];
-  const topTera   = allWekMons.slice().sort((a,b)=>b.teras-a.teras)[0];
+
 
   // Highlight card builder
   const mkHL = (icon, label, coach, mon, val, clickFn) => {
@@ -1492,7 +1555,6 @@ function renderWeeklyRecap(state) {
   const extraHighlights = [
     topKiller && topKiller.tk>0 ? mkHL('⚔️','Top killer',topKiller.coach,topKiller.mon,topKiller.tk+' kills',()=>{state.mdd.coach=topKiller.coach;state.mdd.mon=topKiller.mon;state.view='mon';render(state);}) : null,
     topDmg ? mkHL('💥','Most damage',topDmg.coach,topDmg.mon,Math.round(topDmg.dout)+'%',()=>{state.mdd.coach=topDmg.coach;state.mdd.mon=topDmg.mon;state.view='mon';render(state);}) : null,
-    topTera && topTera.teras>0 ? mkHL('✨','Most teras',topTera.coach,topTera.mon,topTera.teras+'x',()=>{state.mdd.coach=topTera.coach;state.mdd.mon=topTera.mon;state.view='mon';render(state);}) : null,
   ].filter(x=>x);
 
   // Results grid with proper Bo3 scores
@@ -1528,7 +1590,8 @@ function renderWeeklyRecap(state) {
   });
 
   return el('div',{},[
-    section('Week '+wk+' Recap', 'Most recently completed week — all results and standouts',
+    weekSelector,
+    section('Week '+wk+' Recap', (selectedWk < maxWk ? 'Historical recap' : 'Most recently completed week')+' — all results and standouts',
       el('div',{},[
         highlights.length>0?el('div',{style:{display:'flex',gap:'10px',flexWrap:'wrap',padding:'16px 20px 8px'}},highlights):null,
         extraHighlights.length>0?el('div',{style:{display:'flex',gap:'10px',flexWrap:'wrap',padding:'0 20px 8px'}},extraHighlights):null,
@@ -3676,7 +3739,7 @@ function applyTheme(dark) {
   const vars = dark ? {
     '--color-background-primary':   '#13151c',
     '--color-background-secondary': '#1a1d27',
-    '--color-background-tertiary':  '#222535',
+    '--color-background-tertiary':  '#0e1016',
     '--color-background-success':   '#16653480',
     '--color-background-danger':    '#991b1b80',
     '--color-background-warning':   '#92400e80',
