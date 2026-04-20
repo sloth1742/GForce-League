@@ -2863,34 +2863,37 @@ function viewSchedule(state) {
   ]);
 }
 // ============================================================
-// PLAYOFF CONFIG — edit these values each season
+// PLAYOFF CONFIG
 // ============================================================
 const PLAYOFF_CONFIG = {
   season: 2026,
-  format: 'single',      // 'single' | 'double'
-  teams: 12,             // teams in bracket
-  bestOf: 3,             // games per series (or per-round: {r1:3,qf:3,sf:3,final:5})
+  format: 'single',
+  teams: 12,
+  bestOf: 5,
   thirdPlace: true,
-  seedingMethod: 'standings',  // 'standings' | 'manual'
+  seedingMethod: 'standings',
 };
 
-// ============================================================
-// BRACKET STATE — update as results come in
-// Seeds will auto-populate from standings once Week 11 is done.
-// To override, set manualSeeds to an ordered array of coach names.
-// ============================================================
 const PLAYOFF_BRACKET = {
-  locked: false,           // set true to finalize bracket / prevent seed changes
-  manualSeeds: null,       // null = use standings rankings; or ['Abbey','Joe',...]
+  locked: false,
+  manualSeeds: null,
   results: {
-    // Format: 'MATCH_ID': { w1: gamesWon_by_home, w2: gamesWon_by_away, done: bool }
-    // Example: 'R1-1': { w1: 2, w2: 1, done: true }
-    // Leave empty until games are played
+    // Winners bracket: 'R1-1','R1-2','R1-3','R1-4'
+    //                  'QF-1','QF-2','QF-3','QF-4'
+    //                  'SF-1','SF-2','FIN'
+    // Losers bracket:  'LBR1-1','LBR1-2'
+    //                  'LBR2-1','LBR2-2'
+    //                  'LBR3-1','LBR3-2'
+    //                  'LBSF-1','LBSF-2','LBFIN'
+    // Format: { w1: gamesWonByHome, w2: gamesWonByAway, done: bool }
   },
 };
 
+const PLAYOFF_GOLD   = '#D4AF37';
+const PLAYOFF_BRONZE = '#CD7F32';
+
 // ============================================================
-// Bracket logic
+// Seed helpers
 // ============================================================
 function getPlayoffSeeds(gameLog) {
   if (PLAYOFF_BRACKET.manualSeeds) return PLAYOFF_BRACKET.manualSeeds;
@@ -2901,499 +2904,387 @@ function getPlayoffSeeds(gameLog) {
     .map(s => s.coach);
 }
 
+// ============================================================
+// Bracket computation
+// ============================================================
 function getBracketMatchups(seeds) {
-  // 12-team: seeds 1-4 get byes, 5v12, 6v11, 7v10, 8v9
-  const bo = (typeof PLAYOFF_CONFIG.bestOf === 'object')
-    ? PLAYOFF_CONFIG.bestOf
-    : { r1: PLAYOFF_CONFIG.bestOf, qf: PLAYOFF_CONFIG.bestOf, sf: PLAYOFF_CONFIG.bestOf, final: PLAYOFF_CONFIG.bestOf };
+  const bo = PLAYOFF_CONFIG.bestOf;
+  const r  = PLAYOFF_BRACKET.results;
 
-  const r = PLAYOFF_BRACKET.results;
-
-  // Helper: resolve a seed reference to a coach name (or placeholder)
   function seedCoach(seed) {
     if (typeof seed === 'number') return seeds[seed - 1] || '?';
-    return seed; // already a name
+    return seed;
   }
-
-  function matchWinner(id, home, away) {
+  function seedNum(coach) {
+    const i = seeds.indexOf(coach);
+    return i >= 0 ? i + 1 : 999;
+  }
+  function matchWinner(id, c1, c2) {
     const res = r[id];
     if (!res || !res.done) return null;
-    return res.w1 > res.w2 ? home : away;
+    return res.w1 > res.w2 ? c1 : c2;
   }
-  function matchLoser(id, home, away) {
+  function matchLoser(id, c1, c2) {
     const res = r[id];
     if (!res || !res.done) return null;
-    return res.w1 < res.w2 ? home : away;
+    return res.w1 < res.w2 ? c1 : c2;
   }
 
-  // Round 1
+  // ── Winners bracket ──────────────────────────────────────
   const r1 = [
-    { id: 'R1-1', seed1: 5, seed2: 12, bo: bo.r1 },
-    { id: 'R1-2', seed1: 6, seed2: 11, bo: bo.r1 },
-    { id: 'R1-3', seed1: 7, seed2: 10, bo: bo.r1 },
-    { id: 'R1-4', seed1: 8, seed2:  9, bo: bo.r1 },
-  ].map(m => ({
-    ...m,
-    c1: seedCoach(m.seed1), c2: seedCoach(m.seed2),
-    res: r[m.id] || null,
-    winner: matchWinner(m.id, seedCoach(m.seed1), seedCoach(m.seed2)),
-    loser:  matchLoser(m.id,  seedCoach(m.seed1), seedCoach(m.seed2)),
-  }));
+    { id:'R1-1', seed1:5,  seed2:12 },
+    { id:'R1-2', seed1:6,  seed2:11 },
+    { id:'R1-3', seed1:7,  seed2:10 },
+    { id:'R1-4', seed1:8,  seed2:9  },
+  ].map(m => {
+    const c1 = seedCoach(m.seed1), c2 = seedCoach(m.seed2);
+    return { ...m, bo, c1, c2, res: r[m.id]||null,
+      winner: matchWinner(m.id,c1,c2), loser: matchLoser(m.id,c1,c2) };
+  });
 
-  // QF — higher seed (lower number) always home
   const qf = [
-    { id: 'QF-1', seed1: 1, feedId: 'R1-4', bo: bo.qf },
-    { id: 'QF-2', seed1: 2, feedId: 'R1-3', bo: bo.qf },
-    { id: 'QF-3', seed1: 3, feedId: 'R1-2', bo: bo.qf },
-    { id: 'QF-4', seed1: 4, feedId: 'R1-1', bo: bo.qf },
+    { id:'QF-1', seed1:1, feedId:'R1-4' },  // 1 v W(8v9)
+    { id:'QF-2', seed1:2, feedId:'R1-2' },  // 2 v W(6v11)
+    { id:'QF-3', seed1:3, feedId:'R1-3' },  // 3 v W(7v10)
+    { id:'QF-4', seed1:4, feedId:'R1-1' },  // 4 v W(5v12)
   ].map(m => {
     const feeder = r1.find(x => x.id === m.feedId);
     const c1 = seedCoach(m.seed1);
     const c2 = feeder ? (feeder.winner || '?') : '?';
-    return {
-      ...m, c1, c2,
-      res: r[m.id] || null,
-      winner: matchWinner(m.id, c1, c2),
-      loser:  matchLoser(m.id,  c1, c2),
-    };
+    return { ...m, bo, c1, c2, res: r[m.id]||null,
+      winner: matchWinner(m.id,c1,c2), loser: matchLoser(m.id,c1,c2) };
   });
 
-  // SF
   const sf = [
-    { id: 'SF-1', feedId1: 'QF-1', feedId2: 'QF-4', bo: bo.sf },
-    { id: 'SF-2', feedId1: 'QF-2', feedId2: 'QF-3', bo: bo.sf },
+    { id:'SF-1', feedId1:'QF-1', feedId2:'QF-4' },
+    { id:'SF-2', feedId1:'QF-2', feedId2:'QF-3' },
   ].map(m => {
     const f1 = qf.find(x => x.id === m.feedId1);
     const f2 = qf.find(x => x.id === m.feedId2);
-    const c1 = f1 ? (f1.winner || '?') : '?';
-    const c2 = f2 ? (f2.winner || '?') : '?';
-    return {
-      ...m, c1, c2,
-      res: r[m.id] || null,
-      winner: matchWinner(m.id, c1, c2),
-      loser:  matchLoser(m.id,  c1, c2),
-    };
+    const c1 = f1 ? (f1.winner||'?') : '?';
+    const c2 = f2 ? (f2.winner||'?') : '?';
+    return { ...m, bo, c1, c2, res: r[m.id]||null,
+      winner: matchWinner(m.id,c1,c2), loser: matchLoser(m.id,c1,c2) };
   });
 
-  // 3rd place
-  const sf1 = sf[0], sf2 = sf[1];
-  const third = PLAYOFF_CONFIG.thirdPlace ? [{
-    id: '3RD',
-    c1: sf1 ? (sf1.loser || '?') : '?',
-    c2: sf2 ? (sf2.loser || '?') : '?',
-    bo: bo.final,
-    res: r['3RD'] || null,
-    winner: matchWinner('3RD', sf1?.loser || '?', sf2?.loser || '?'),
-  }] : [];
+  const fin = (() => {
+    const c1 = sf[0]?.winner||'?', c2 = sf[1]?.winner||'?';
+    return { id:'FIN', bo, c1, c2, res: r['FIN']||null,
+      winner: matchWinner('FIN',c1,c2), loser: matchLoser('FIN',c1,c2) };
+  })();
 
-  const fin = [{
-    id: 'FIN',
-    c1: sf1 ? (sf1.winner || '?') : '?',
-    c2: sf2 ? (sf2.winner || '?') : '?',
-    bo: bo.final,
-    res: r['FIN'] || null,
-    winner: matchWinner('FIN', sf1?.winner || '?', sf2?.winner || '?'),
-  }];
+  // ── Losers bracket ───────────────────────────────────────
+  // LBR1: R1 losers pair off (R1-1 loser vs R1-2 loser, R1-3 loser vs R1-4 loser)
+  const lbr1 = [
+    { id:'LBR1-1', feedA:'R1-1', feedB:'R1-2' },
+    { id:'LBR1-2', feedA:'R1-3', feedB:'R1-4' },
+  ].map(m => {
+    const fA = r1.find(x => x.id === m.feedA);
+    const fB = r1.find(x => x.id === m.feedB);
+    const c1 = fA ? (fA.loser||'?') : '?';
+    const c2 = fB ? (fB.loser||'?') : '?';
+    return { ...m, bo, c1, c2, res: r[m.id]||null,
+      winner: matchWinner(m.id,c1,c2), loser: matchLoser(m.id,c1,c2) };
+  });
 
-  return { r1, qf, sf, third, fin };
+  // Pool after LBR1 + QF: 2 LBR1 winners + 4 QF losers = 6 teams
+  // Top 2 seeds get byes into LBR3; bottom 4 play LBR2
+  const lbPool = [];
+  lbr1.forEach(m => {
+    if (m.winner && m.winner !== '?') lbPool.push({ coach: m.winner, from: 'lbr1' });
+  });
+  qf.forEach(m => {
+    if (m.loser && m.loser !== '?') lbPool.push({ coach: m.loser, from: 'qf' });
+  });
+  lbPool.sort((a, b) => seedNum(a.coach) - seedNum(b.coach));
+
+  const byeTeams  = lbPool.slice(0, 2);
+  const lbr2Pool  = lbPool.slice(2);
+
+  // LBR2: pair LBR1 winner vs QF loser among the 4 non-bye teams
+  const lbr2NonBye_lbr1 = lbr2Pool.filter(t => t.from === 'lbr1');
+  const lbr2NonBye_qf   = lbr2Pool.filter(t => t.from === 'qf');
+
+  const lbr2 = [0, 1].map(i => {
+    const id = 'LBR2-' + (i+1);
+    const c1 = lbr2NonBye_lbr1[i]?.coach || '?';
+    const c2 = lbr2NonBye_qf[i]?.coach   || '?';
+    return { id, bo, c1, c2, res: r[id]||null,
+      winner: matchWinner(id,c1,c2), loser: matchLoser(id,c1,c2) };
+  });
+
+  // LBR3: bye teams face LBR2 winners
+  const lbr3 = [0, 1].map(i => {
+    const id = 'LBR3-' + (i+1);
+    const c1 = byeTeams[i]?.coach  || '?';
+    const c2 = lbr2[i]?.winner     || '?';
+    return { id, bo, c1, c2, res: r[id]||null,
+      winner: matchWinner(id,c1,c2), loser: matchLoser(id,c1,c2) };
+  });
+
+  // LBSF: LBR3 winners vs SF losers
+  // Higher seed SF loser faces LOWER seed LBR3 winner
+  const lbr3Winners = lbr3.map(m => ({ coach: m.winner||'?', seed: seedNum(m.winner||'?') }))
+    .sort((a,b) => a.seed - b.seed);  // [0]=higher seed, [1]=lower seed
+  const sfLosers = sf.map(m => ({ coach: m.loser||'?', seed: seedNum(m.loser||'?') }))
+    .sort((a,b) => a.seed - b.seed);  // [0]=higher seed SF loser
+
+  // Higher seed SF loser (sfLosers[0]) vs lower LBR3 winner (lbr3Winners[1])
+  // Lower seed SF loser (sfLosers[1]) vs higher LBR3 winner (lbr3Winners[0])
+  const lbsf = [
+    { id:'LBSF-1', c1: sfLosers[0]?.coach||'?',   c2: lbr3Winners[1]?.coach||'?' },
+    { id:'LBSF-2', c1: sfLosers[1]?.coach||'?',   c2: lbr3Winners[0]?.coach||'?' },
+  ].map(m => ({
+    ...m, bo, res: r[m.id]||null,
+    winner: matchWinner(m.id,m.c1,m.c2), loser: matchLoser(m.id,m.c1,m.c2)
+  }));
+
+  const lbfin = (() => {
+    const c1 = lbsf[0]?.winner||'?', c2 = lbsf[1]?.winner||'?';
+    return { id:'LBFIN', bo, c1, c2, res: r['LBFIN']||null,
+      winner: matchWinner('LBFIN',c1,c2) };
+  })();
+
+  return { r1, qf, sf, fin, lbr1, lbPool, byeTeams, lbr2, lbr3, lbsf, lbfin };
 }
 
 // ============================================================
-// Bracket card renderer
+// Match card renderer
 // ============================================================
-function bracketMatchCard(match, roundLabel, onClick) {
-  const res = match.res;
-  const done = res && res.done;
-  const inProgress = res && !res.done && (res.w1 > 0 || res.w2 > 0);
-  const upcoming = !res;
-  const pending = match.c1 === '?' || match.c2 === '?';
+function bracketMatchCard(match, roundLabel, onClick, accentColor) {
+  const res   = match.res;
+  const done  = res && res.done;
+  const live  = res && !res.done && (res.w1 > 0 || res.w2 > 0);
+  const color = accentColor || PLAYOFF_GOLD;
 
-  const c1Color = COACH_COLORS[match.c1] || '#555';
-  const c2Color = COACH_COLORS[match.c2] || '#555';
-  const winnerColor = done ? (res.w1 > res.w2 ? c1Color : c2Color) : null;
-
-  const makeCoachRow = (coach, wins, isWinner) => {
-    const color = COACH_COLORS[coach] || '#555';
-    const isUnknown = coach === '?';
+  const makeRow = (coach, wins, isWinner) => {
+    const cc = COACH_COLORS[coach] || '#555';
+    const unknown = !coach || coach === '?';
     return el('div', {
       style: {
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '7px 12px',
-        background: done && isWinner ? color + '22' : 'transparent',
+        background: done && isWinner ? cc + '22' : 'transparent',
         borderRadius: 'var(--border-radius-sm)',
-        opacity: isUnknown ? '0.4' : '1'
+        opacity: unknown ? '0.4' : '1'
       }
     }, [
       el('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } }, [
         el('span', {
           style: {
             width: '8px', height: '8px', borderRadius: '50%',
-            background: isUnknown ? 'var(--color-text-tertiary)' : color,
-            flexShrink: '0',
-            boxShadow: (done && isWinner) ? '0 0 8px ' + color + '80' : 'none'
+            background: unknown ? 'var(--color-text-tertiary)' : cc, flexShrink: '0',
+            boxShadow: done && isWinner ? '0 0 8px ' + cc + '80' : 'none'
           }
         }),
         el('span', {
           style: {
-            fontSize: '13px',
-            fontWeight: (done && isWinner) ? '600' : '500',
-            color: isUnknown ? 'var(--color-text-tertiary)' : 'var(--color-text-primary)'
+            fontSize: '13px', fontWeight: done && isWinner ? '600' : '500',
+            color: unknown ? 'var(--color-text-tertiary)' : 'var(--color-text-primary)'
           }
-        }, isUnknown ? 'TBD' : coach)
+        }, unknown ? 'TBD' : coach)
       ]),
       done ? el('span', {
         style: {
-          fontFamily: 'var(--font-display)',
-          fontWeight: '700',
-          fontSize: '16px',
-          color: isWinner ? color : 'var(--color-text-tertiary)'
+          fontFamily: 'var(--font-display)', fontWeight: '700', fontSize: '16px',
+          color: isWinner ? cc : 'var(--color-text-tertiary)'
         }
       }, String(wins)) : null
     ].filter(x => x));
   };
 
+  const winnerColor = done
+    ? (res.w1 > res.w2 ? (COACH_COLORS[match.c1]||'#888') : (COACH_COLORS[match.c2]||'#888'))
+    : null;
+
   const card = el('div', {
-    onclick: (done && onClick) ? onClick : null,
+    onclick: done && onClick ? onClick : null,
     style: {
       background: 'var(--color-background-secondary)',
-      border: '0.5px solid ' + (done ? (winnerColor + '50') : 'var(--color-border-tertiary)'),
-      borderRadius: 'var(--border-radius-lg)',
-      overflow: 'hidden',
-      transition: 'all 0.15s',
-      cursor: (done && onClick) ? 'pointer' : 'default',
-      minWidth: '200px'
+      border: '0.5px solid ' + (done ? winnerColor + '50' : 'var(--color-border-tertiary)'),
+      borderRadius: 'var(--border-radius-lg)', overflow: 'hidden',
+      transition: 'all 0.15s', cursor: done && onClick ? 'pointer' : 'default',
+      minWidth: '190px'
     }
   }, [
     el('div', {
       style: {
-        padding: '6px 12px',
-        background: done ? 'var(--color-background-primary)' : 'var(--color-background-secondary)',
+        padding: '5px 12px', background: 'var(--color-background-primary)',
         borderBottom: '0.5px solid var(--color-border-tertiary)',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center'
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center'
       }
     }, [
-      el('span', {
-        style: {
-          fontSize: '10px',
-          fontWeight: '600',
-          textTransform: 'uppercase',
-          letterSpacing: '0.6px',
-          color: 'var(--color-text-tertiary)'
-        }
-      }, roundLabel),
-      inProgress ? el('span', {
-        style: {
-          fontSize: '10px',
-          fontWeight: '600',
-          color: 'var(--color-text-warning)',
-          textTransform: 'uppercase',
-          letterSpacing: '0.4px'
-        }
-      }, 'Live') : null,
-      done ? el('span', {
-        style: {
-          fontSize: '10px',
-          color: 'var(--color-text-tertiary)'
-        }
-      }, 'Bo' + match.bo) : null
+      el('span', { style: { fontSize: '10px', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.6px', color } }, roundLabel),
+      live ? el('span', { style: { fontSize: '10px', fontWeight: '600', color: 'var(--color-text-warning)' } }, 'Live') :
+      done ? el('span', { style: { fontSize: '10px', color: 'var(--color-text-tertiary)' } }, 'Bo' + match.bo) : null
     ].filter(x => x)),
     el('div', { style: { padding: '4px 0' } }, [
-      makeCoachRow(match.c1, res ? res.w1 : 0, done && res.w1 > res.w2),
+      makeRow(match.c1, res ? res.w1 : 0, done && res.w1 > res.w2),
       el('div', { style: { height: '0.5px', background: 'var(--color-border-tertiary)', margin: '0 12px' } }),
-      makeCoachRow(match.c2, res ? res.w2 : 0, done && res.w2 > res.w1),
+      makeRow(match.c2, res ? res.w2 : 0, done && res.w2 > res.w1),
     ])
   ]);
 
   if (done && onClick) {
-    card.onmouseover = () => {
-      card.style.transform = 'translateY(-2px)';
-      card.style.borderColor = winnerColor + '80';
-    };
-    card.onmouseout = () => {
-      card.style.transform = '';
-      card.style.borderColor = winnerColor + '50';
-    };
+    card.onmouseover = () => { card.style.transform = 'translateY(-2px)'; card.style.borderColor = winnerColor + '80'; };
+    card.onmouseout  = () => { card.style.transform = '';  card.style.borderColor = winnerColor + '50'; };
   }
   return card;
 }
 
 // ============================================================
-// Bracket view
+// View entrypoint
 // ============================================================
 function viewPlayoffs(state) {
-  const seeds = getPlayoffSeeds(state.data.gameLog);
-  const { r1, qf, sf, third, fin } = getBracketMatchups(seeds);
-  const pTab = state.playoffs.tab || 'bracket';
+  const seeds   = getPlayoffSeeds(state.data.gameLog);
+  const bracket = getBracketMatchups(seeds);
+  const pTab    = state.playoffs.tab || 'bracket';
 
-  const tabs = [
-    { id: 'bracket', label: 'Bracket' },
-    { id: 'stats', label: 'Playoff stats' },
-  ];
+  const subTabBar = el('div', { style: { display: 'flex', gap: '8px', marginBottom: '1.5rem' } },
+    [['bracket','Bracket'],['stats','Playoff stats']].map(([id, label]) => {
+      const active = pTab === id;
+      return el('button', {
+        onclick: () => { state.playoffs.tab = id; render(state); },
+        style: {
+          padding: '8px 18px', fontSize: '13px',
+          fontWeight: active ? '600' : '500',
+          background: active ? PLAYOFF_GOLD + '22' : 'var(--color-background-secondary)',
+          color: active ? PLAYOFF_GOLD : 'var(--color-text-secondary)',
+          border: active ? '0.5px solid ' + PLAYOFF_GOLD + '60' : '0.5px solid var(--color-border-tertiary)',
+          borderRadius: 'var(--border-radius-md)', cursor: 'pointer', transition: 'all 0.15s'
+        }
+      }, label);
+    })
+  );
 
-  const subTabBar = el('div', {
-    style: {
-      display: 'flex',
-      gap: '8px',
-      marginBottom: '1.5rem'
-    }
-  }, tabs.map(t => {
-    const active = pTab === t.id;
-    const btn = el('button', {
-      onclick: () => { state.playoffs.tab = t.id; render(state); },
-      style: {
-        padding: '8px 18px',
-        fontSize: '13px',
-        fontWeight: active ? '600' : '500',
-        background: active ? PLAYOFF_GOLD + '22' : 'var(--color-background-secondary)',
-        color: active ? PLAYOFF_GOLD : 'var(--color-text-secondary)',
-        border: active ? '0.5px solid ' + PLAYOFF_GOLD + '60' : '0.5px solid var(--color-border-tertiary)',
-        borderRadius: 'var(--border-radius-md)',
-        cursor: 'pointer',
-        transition: 'all 0.15s'
-      }
-    }, t.label);
-    return btn;
-  }));
-
-  if (pTab === 'bracket') {
-    return el('div', {}, [subTabBar, renderBracket(state, seeds, { r1, qf, sf, third, fin })]);
-  } else {
-    return el('div', {}, [subTabBar, renderPlayoffStats(state, seeds, { r1, qf, sf, third, fin })]);
-  }
+  return el('div', {}, [
+    subTabBar,
+    pTab === 'bracket'
+      ? renderBracket(state, seeds, bracket)
+      : renderPlayoffStats(state, seeds, bracket)
+  ]);
 }
 
-const PLAYOFF_GOLD = '#D4AF37';
+// ============================================================
+// Bracket renderer
+// ============================================================
+function renderBracket(state, seeds, bracket) {
+  const { r1, qf, sf, fin, lbr1, byeTeams, lbr2, lbr3, lbsf, lbfin } = bracket;
 
-function renderBracket(state, seeds, { r1, qf, sf, third, fin }) {
-  const h2hJump = (c1, c2) => () => {
-    state.h2h.c1 = c1;
-    state.h2h.c2 = c2;
-    state.view = 'h2h';
-    render(state);
+  const jump = (c1, c2) => () => {
+    state.h2h.c1 = c1; state.h2h.c2 = c2; state.view = 'h2h'; render(state);
   };
+  const mc = (m, label, color) =>
+    bracketMatchCard(m, label, m.winner ? jump(m.c1, m.c2) : null, color);
 
-  // Seeds display
+  const sp = h => el('div', { style: { height: h + 'px', flexShrink: '0' } });
+
+  const colStyle = { display: 'flex', flexDirection: 'column', gap: '12px', flex: '1', minWidth: '190px' };
+  const colHdr = (label, color) => el('div', {
+    style: { fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.8px', color: color || 'var(--color-text-tertiary)', marginBottom: '4px', textAlign: 'center' }
+  }, label);
+  const col = (label, cards, color) => el('div', { style: colStyle }, [colHdr(label, color), ...cards]);
+
+  // Seeds
   const seedList = el('div', {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-      gap: '8px',
-      padding: '16px 20px 20px'
-    }
+    style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(175px, 1fr))', gap: '8px', padding: '16px 20px 20px' }
   }, seeds.map((coach, i) => {
-    const seed = i + 1;
-    const hasBye = seed <= 4;
+    const seed = i + 1, hasBye = seed <= 4;
     return el('div', {
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: '10px',
-        padding: '8px 12px',
-        background: 'var(--color-background-secondary)',
-        border: hasBye ? '0.5px solid ' + PLAYOFF_GOLD + '50' : '0.5px solid var(--color-border-tertiary)',
-        borderRadius: 'var(--border-radius-md)'
-      }
+      style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px', background: 'var(--color-background-secondary)', border: hasBye ? '0.5px solid ' + PLAYOFF_GOLD + '50' : '0.5px solid var(--color-border-tertiary)', borderRadius: 'var(--border-radius-md)' }
     }, [
-      el('span', {
-        style: {
-          fontFamily: 'var(--font-display)',
-          fontWeight: '700',
-          fontSize: '15px',
-          color: hasBye ? PLAYOFF_GOLD : 'var(--color-text-tertiary)',
-          minWidth: '24px',
-          textAlign: 'right'
-        }
-      }, '#' + seed),
+      el('span', { style: { fontFamily: 'var(--font-display)', fontWeight: '700', fontSize: '14px', color: hasBye ? PLAYOFF_GOLD : 'var(--color-text-tertiary)', minWidth: '24px', textAlign: 'right' } }, '#' + seed),
       coachBadge(coach),
-      hasBye ? el('span', {
-        style: {
-          fontSize: '10px',
-          fontWeight: '600',
-          color: PLAYOFF_GOLD,
-          textTransform: 'uppercase',
-          letterSpacing: '0.4px',
-          marginLeft: 'auto'
-        }
-      }, 'bye') : null
+      hasBye ? el('span', { style: { fontSize: '10px', fontWeight: '600', color: PLAYOFF_GOLD, textTransform: 'uppercase', letterSpacing: '0.4px', marginLeft: 'auto' } }, 'bye') : null
     ].filter(x => x));
   }));
 
-  const seedSection = section('Seedings', PLAYOFF_CONFIG.teams + '-team ' + PLAYOFF_CONFIG.format + ' elimination • Bo' + PLAYOFF_CONFIG.bestOf + ' per round', seedList, { marginBottom: '1.25rem' });
+  const seedSection = section('Seedings', PLAYOFF_CONFIG.teams + '-team bracket  •  Bo' + PLAYOFF_CONFIG.bestOf + ' every round', seedList, { marginBottom: '1.25rem' });
 
-  // Bracket columns
-  const colStyle = {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '16px',
-    flex: '1',
-    minWidth: '200px'
-  };
-
-  const col = (label, cards) => el('div', { style: colStyle }, [
-    el('div', {
-      style: {
-        fontSize: '11px',
-        fontWeight: '700',
-        textTransform: 'uppercase',
-        letterSpacing: '0.8px',
-        color: 'var(--color-text-tertiary)',
-        marginBottom: '4px',
-        textAlign: 'center'
-      }
-    }, label),
-    ...cards
+  // Winners bracket
+  const wbGrid = el('div', { style: { display: 'flex', gap: '20px', overflowX: 'auto', padding: '16px 20px 24px', alignItems: 'flex-start' } }, [
+    col('Round 1',     r1.map(m => mc(m, 'Round 1'))),
+    col('Quarterfinals', [sp(50), mc(qf[0],'Quarterfinal'), sp(12), mc(qf[1],'Quarterfinal'), sp(12), mc(qf[2],'Quarterfinal'), sp(12), mc(qf[3],'Quarterfinal'), sp(50)]),
+    col('Semifinals',    [sp(120), mc(sf[0],'Semifinal'), sp(72), mc(sf[1],'Semifinal'), sp(120)]),
+    col('Final',         [sp(185), mc(fin,'Grand Final'), sp(185)]),
   ]);
+  const wbSection = section('Winners Bracket', 'Champion decided here', wbGrid, { marginBottom: '1.25rem' });
 
-  // Space-filling divs to vertically align QF/SF cards
-  const spacer = (h) => el('div', { style: { height: h + 'px', flexShrink: '0' } });
+  // Losers bracket
+  const byeDisplay = byeTeams.length > 0
+    ? el('div', { style: { padding: '0 20px 12px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } }, [
+        el('span', { style: { fontSize: '11px', color: PLAYOFF_BRONZE, fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.6px' } }, 'LB R3 byes:'),
+        ...byeTeams.map(t => coachBadge(t.coach))
+      ])
+    : null;
 
-  const r1Cards = r1.map(m => bracketMatchCard(m, 'Round 1', m.winner ? h2hJump(m.c1, m.c2) : null));
-  const qfCards = [
-    spacer(60),
-    bracketMatchCard(qf[0], 'Quarterfinal', qf[0].winner ? h2hJump(qf[0].c1, qf[0].c2) : null),
-    spacer(16),
-    bracketMatchCard(qf[1], 'Quarterfinal', qf[1].winner ? h2hJump(qf[1].c1, qf[1].c2) : null),
-    spacer(16),
-    bracketMatchCard(qf[2], 'Quarterfinal', qf[2].winner ? h2hJump(qf[2].c1, qf[2].c2) : null),
-    spacer(16),
-    bracketMatchCard(qf[3], 'Quarterfinal', qf[3].winner ? h2hJump(qf[3].c1, qf[3].c2) : null),
-    spacer(60),
-  ];
-  const sfCards = [
-    spacer(130),
-    bracketMatchCard(sf[0], 'Semifinal', sf[0].winner ? h2hJump(sf[0].c1, sf[0].c2) : null),
-    spacer(80),
-    bracketMatchCard(sf[1], 'Semifinal', sf[1].winner ? h2hJump(sf[1].c1, sf[1].c2) : null),
-    spacer(130),
-  ];
-  const finCards = [
-    spacer(200),
-    bracketMatchCard(fin[0], 'Grand Final', fin[0].winner ? h2hJump(fin[0].c1, fin[0].c2) : null),
-    spacer(50),
-    bracketMatchCard(third[0], '3rd Place', third[0]?.winner ? h2hJump(third[0].c1, third[0].c2) : null),
-    spacer(200),
-  ];
-
-  const bracketGrid = el('div', {
-    style: {
-      display: 'flex',
-      gap: '24px',
-      overflowX: 'auto',
-      padding: '16px 20px 24px',
-      alignItems: 'flex-start'
-    }
-  }, [
-    col('Round 1', r1Cards),
-    col('Quarterfinals', qfCards),
-    col('Semifinals', sfCards),
-    col('Final', finCards),
+  const lbGrid = el('div', { style: { display: 'flex', gap: '20px', overflowX: 'auto', padding: '16px 20px 24px', alignItems: 'flex-start' } }, [
+    col('LB Round 1', lbr1.map(m => mc(m, 'LB R1', PLAYOFF_BRONZE))),
+    col('LB Round 2', [sp(20), mc(lbr2[0],'LB R2',PLAYOFF_BRONZE), sp(12), mc(lbr2[1],'LB R2',PLAYOFF_BRONZE), sp(20)]),
+    col('LB Round 3', [sp(40), mc(lbr3[0],'LB R3',PLAYOFF_BRONZE), sp(12), mc(lbr3[1],'LB R3',PLAYOFF_BRONZE), sp(40)]),
+    col('LB Semis',   [sp(60), mc(lbsf[0],'LB Semi',PLAYOFF_BRONZE), sp(12), mc(lbsf[1],'LB Semi',PLAYOFF_BRONZE), sp(60)]),
+    col('3rd Place',  [sp(88), mc(lbfin,'3rd Place',PLAYOFF_BRONZE), sp(88)]),
   ]);
-
-  const bracketSection = section(
-    'Bracket',
-    PLAYOFF_CONFIG.season + ' playoffs',
-    bracketGrid,
+  const lbSection = section('Losers Bracket', 'For 3rd place  •  Top 2 seeds after QF round receive byes into LB R3',
+    el('div', {}, [byeDisplay, lbGrid].filter(x => x)),
     { marginBottom: '1.25rem' }
   );
 
-  return el('div', {}, [seedSection, bracketSection]);
+  return el('div', {}, [seedSection, wbSection, lbSection]);
 }
 
 // ============================================================
-// Playoff stats (scoped to playoff game IDs)
+// Playoff stats
 // ============================================================
 function getPlayoffGameIds(gameLog) {
-  // Playoff games are tagged by having wk > 11, OR we can store them
-  // in PLAYOFF_BRACKET.results and cross-reference GIDs.
-  // For now, return games with wk > 11 (parser tags them this week=12+)
   return new Set(gameLog.filter(r => r.wk > 11).map(r => r.gid));
 }
 
 function renderPlayoffStats(state, seeds, bracket) {
-  const pGids = getPlayoffGameIds(state.data.gameLog);
+  const pGids  = getPlayoffGameIds(state.data.gameLog);
   const pGames = state.data.gameLog.filter(r => pGids.has(r.gid));
 
   if (pGames.length === 0) {
-    return el('div', {}, section(
-      'Playoff stats',
-      'No playoff games parsed yet',
-      el('div', {
-        style: { padding: '32px 24px', textAlign: 'center', color: 'var(--color-text-tertiary)' }
-      }, [
+    return section('Playoff stats', 'No playoff games yet',
+      el('div', { style: { padding: '40px 24px', textAlign: 'center', color: 'var(--color-text-tertiary)' } }, [
         el('div', { style: { fontSize: '32px', marginBottom: '12px' } }, '🏆'),
         el('div', { style: { fontSize: '14px', fontWeight: '500', marginBottom: '6px' } }, 'Playoffs haven\'t started yet'),
-        el('div', { style: { fontSize: '13px' } }, 'Stats will appear here once playoff replays are uploaded')
+        el('div', { style: { fontSize: '13px' } }, 'Stats appear once playoff replays are uploaded')
       ])
-    ));
+    );
   }
 
-  const mons = monStats(pGames);
-  const top = Object.values(mons).sort((a, b) => b.mvp - a.mvp).slice(0, 20);
-  const coachS = coachStats(pGames);
+  const mons    = monStats(pGames);
+  const top     = Object.values(mons).sort((a, b) => b.mvp - a.mvp).slice(0, 20);
+  const coachS  = coachStats(pGames);
+  const coaches = Object.values(coachS).filter(s => s.gp > 0).sort((a, b) => a.rank - b.rank);
 
-  const headers = [
-    { key: 'rank', label: '#' },
-    { key: 'mvp', label: 'MVP' },
-    { key: 'mon', label: 'Pokemon', align: 'left' },
-    { key: 'coach', label: 'Coach', align: 'left' },
-    { key: 'gp', label: 'GP' },
-    { key: 'record', label: 'W-L' },
-    { key: 'winPct', label: 'Win%' },
-    { key: 'tk', label: 'K' },
-    { key: 'deaths', label: 'D' },
-    { key: 'kdr', label: 'K/D' },
-    { key: 'dout', label: 'Dmg' },
-  ];
-
-  const rows = top.map((r, i) => [
-    rankBadge(i + 1),
-    el('span', { style: { fontFamily: 'var(--font-display)', fontWeight: '600', fontSize: '15px' } }, String(r.mvp)),
-    monLink(r.coach, r.mon),
-    coachBadge(r.coach),
-    formatInt(r.gp),
-    mono(r.gw + '-' + (r.gp - r.gw)),
-    formatPct(r.winPct),
-    formatInt(r.tk),
-    formatInt(r.deaths),
-    formatKDR(r.kdr),
-    formatDmg(r.dout),
+  const coachRows = coaches.map(s => [
+    rankBadge(s.rank), coachBadge(s.coach),
+    mono(s.sw_series+'-'+s.sl_series), mono(s.gw+'-'+(s.gp-s.gw)),
+    formatInt(s.kills), formatInt(s.deaths), formatKDR(s.kdr), formatInt(s.dmgPerGame)+'%'
   ]);
-
-  const tbl = makeTable(headers, rows, { stickyHeader: true });
-
-  const coachArr = Object.values(coachS).sort((a, b) => a.rank - b.rank);
-  const coachHeaders = [
-    { key: 'rank', label: '#' },
-    { key: 'coach', label: 'Coach', align: 'left' },
-    { key: 'series', label: 'Series' },
-    { key: 'games', label: 'Games' },
-    { key: 'kills', label: 'K' },
-    { key: 'deaths', label: 'D' },
-    { key: 'kdr', label: 'K/D' },
-    { key: 'dpg', label: 'Dmg/G' },
-  ];
-  const coachRows = coachArr.filter(s => s.gp > 0).map(s => [
-    rankBadge(s.rank),
-    coachBadge(s.coach),
-    mono(s.sw_series + '-' + s.sl_series),
-    mono(s.gw + '-' + s.gl),
-    formatInt(s.kills),
-    formatInt(s.deaths),
-    formatKDR(s.kdr),
-    formatInt(s.dmgPerGame) + '%',
+  const monRows = top.map((r, i) => [
+    rankBadge(i+1),
+    el('span', { style: { fontFamily:'var(--font-display)', fontWeight:'600', fontSize:'15px' } }, String(r.mvp)),
+    monLink(r.coach, r.mon), coachBadge(r.coach),
+    formatInt(r.gp), mono(r.gw+'-'+(r.gp-r.gw)),
+    formatInt(r.tk), formatInt(r.deaths), formatKDR(r.kdr), formatDmg(r.dout)
   ]);
 
   return el('div', {}, [
-    section('Coach standings', pGames.length + ' games across ' + pGids.size + ' playoff series',
-      el('div', { style: { overflowX: 'auto' } }, makeTable(coachHeaders, coachRows, { stickyHeader: true })),
+    section('Coach standings', pGames.length + ' playoff games',
+      el('div', { style: { overflowX:'auto' } }, makeTable(
+        [{key:'rank',label:'#'},{key:'coach',label:'Coach',align:'left'},{key:'series',label:'Series'},{key:'games',label:'Games'},{key:'kills',label:'K'},{key:'deaths',label:'D'},{key:'kdr',label:'K/D'},{key:'dpg',label:'Dmg/G'}],
+        coachRows, { stickyHeader: true }
+      )),
       { marginBottom: '1.25rem' }
     ),
     section('Pokemon leaderboard', 'Playoff MVP leaders',
-      el('div', { style: { overflowX: 'auto' } }, tbl)
+      el('div', { style: { overflowX:'auto' } }, makeTable(
+        [{key:'rank',label:'#'},{key:'mvp',label:'MVP'},{key:'mon',label:'Pokemon',align:'left'},{key:'coach',label:'Coach',align:'left'},{key:'gp',label:'GP'},{key:'record',label:'W-L'},{key:'tk',label:'K'},{key:'deaths',label:'D'},{key:'kdr',label:'K/D'},{key:'dout',label:'Dmg'}],
+        monRows, { stickyHeader: true }
+      ))
     )
   ]);
 }
