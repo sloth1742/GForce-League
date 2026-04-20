@@ -401,18 +401,18 @@ function computeSuperlatives(gameLog, turnLog, moveLog) {
     const crits = cgl.reduce((s,r)=>s+(r.cp||0),0);
 
     const SUPERLATIVE_MAP = {
-      'Zion':   { label:'Protect wall',        icon:'🛡️', value: protRate+'%',       sub:'protect block rate' },
-      'Abbey':  { label:'Intimidation king',   icon:'😤', value: intimidate+' triggers', sub:'ability stat drops, league high' },
-      'Evan':   { label:'Tactical depth',      icon:'🎯', value: uniqueMons+' mons', sub:'unique pokemon brought, tied high' },
-      'Gabby':  { label:'Debuff machine',      icon:'📉', value: statDrops+' drops', sub:'stat drops via moves' },
-      'Joe':    { label:'Turtle king',         icon:'🐢', value: protTotal+' protects', sub:'most protect uses in the league' },
-      'Maddi':  { label:'Signature move',      icon:'💚', value: topMove ? topMove[0]+' ×'+topMove[1] : '—', sub:'most used move in the league' },
-      'Alec':   { label:'Revolving door',      icon:'🔄', value: switches+' switches', sub:'most switches in the league' },
-      'Ben':    { label:'Untouchable',         icon:'💎', value: perfectWins+' shutouts', sub:'games won without a single death' },
-      'Medaya': { label:'Perfect protect',     icon:'🔮', value: protRate+'%',       sub:'protect block rate ('+protBlocked+'/'+protTotal+')' },
-      'Ale':    { label:'Widest roster',       icon:'📚', value: uniqueMons+' mons', sub:'most unique pokemon brought' },
-      'Sam':    { label:'Indirect assassin',  icon:'☠️', value: ki+' indirect kills', sub:'tied league high in KI' },
-      'Rowynn': { label:'Deepest bench',       icon:'🏛️', value: uniqueMons+' mons', sub:'most unique mons brought, league high' },
+      'Zion':   { label:'Protect wall',        icon:'🛡️', value: protRate+'%',            sub:'of protects actually blocked something' },
+      'Abbey':  { label:'Intimidation king',   icon:'😤', value: intimidate+' triggers',  sub:'most ability-based stat drops in the league' },
+      'Evan':   { label:'Tactical flexibility',icon:'🎯', value: uniqueMons+' mons used', sub:'tied 2nd in roster diversity' },
+      'Gabby':  { label:'Debuff machine',      icon:'📉', value: statDrops+' stat drops', sub:'most move-based stat drops in the league' },
+      'Joe':    { label:'Turtle king',         icon:'🐢', value: protTotal+' protects',   sub:'most protect uses in the league' },
+      'Maddi':  { label:'One-move wonder',     icon:'💚', value: topMove ? topMove[0]+' ×'+topMove[1] : '—', sub:'signature move — highest single-move use count' },
+      'Alec':   { label:'Revolving door',      icon:'🔄', value: switches+' switches',    sub:'most switches in the league, 3.1/game' },
+      'Ben':    { label:'Untouchable',         icon:'💎', value: perfectWins+' shutouts', sub:'games won without losing a single Pokémon' },
+      'Medaya': { label:'Perfect protect',     icon:'🔮', value: protRate+'%',            sub:'protect block rate ('+protBlocked+'/'+protTotal+' attempts)' },
+      'Ale':    { label:'Roster explorer',     icon:'📚', value: uniqueMons+' mons used', sub:'2nd most unique Pokémon brought all season' },
+      'Sam':    { label:'Indirect assassin',   icon:'☠️', value: ki+' indirect kills',   sub:'tied league high — Rocky Helmet & hazard master' },
+      'Rowynn': { label:'Deepest bench',       icon:'🏛️', value: uniqueMons+' mons used',sub:'most unique Pokémon brought — league high' },
     };
 
     sups[coach] = SUPERLATIVE_MAP[coach] || { label:'Standout', icon:'⭐', value:'—', sub:'' };
@@ -497,6 +497,146 @@ function computeWeeklyRecap(gameLog, moveLog, turnLog) {
   return { wk, results, weekMVP, biggestUpset, mostDominant, closestSeries };
 }
 
+
+
+// ── Missing pivot/move functions (carried from v93) ──────────────────────────
+
+function monMoveStats(moveLog, coach, mon) {
+  const moves = {};
+  moveLog.filter(r => r.coach === coach && r.mon === mon).forEach(r => {
+    if (!moves[r.move]) moves[r.move] = { move: r.move, uses: 0, dmg: 0 };
+    moves[r.move].uses += r.uses || 0;
+    moves[r.move].dmg += r.dmg || 0;
+  });
+  return Object.values(moves).map(m => ({
+    move: m.move,
+    uses: m.uses,
+    dmg: m.dmg,
+    avg: m.uses > 0 ? m.dmg / m.uses : 0
+  })).sort((a, b) => b.uses - a.uses);
+}
+
+function pivotGameStats(gameLog, config) {
+  const { metric, groupBy, filters } = config;
+  const filtered = gameLog.filter(r => {
+    if (filters.coach !== 'All' && r.coach !== filters.coach) return false;
+    if (filters.week !== 'All' && r.wk !== parseInt(filters.week)) return false;
+    if (filters.opponent !== 'All' && r.opp !== filters.opponent) return false;
+    if (filters.teraOnly === 'yes' && !r.tera) return false;
+    if (filters.teraOnly === 'no' && r.tera) return false;
+    if (filters.leadOnly === 'yes' && !r.lead) return false;
+    if (filters.leadOnly === 'no' && r.lead) return false;
+    if (filters.wonOnly === 'yes' && !r.won) return false;
+    if (filters.wonOnly === 'no' && r.won) return false;
+    return true;
+  });
+
+  const groups = {};
+  filtered.forEach(r => {
+    let key;
+    if (groupBy === 'mon') key = r.coach + '|' + r.mon;
+    else if (groupBy === 'coach') key = r.coach;
+    else if (groupBy === 'week') key = r.wk;
+    else if (groupBy === 'opponent') key = r.opp;
+
+    if (!groups[key]) {
+      groups[key] = {
+        key, coach: r.coach, mon: r.mon, wk: r.wk, opp: r.opp,
+        rows: 0, games: new Set(), wins: new Set(),
+        value: 0,
+        kd: 0, ki: 0, deaths: 0, dout: 0, din: 0,
+        sw: 0, teras: 0, cp: 0, cm: 0, moves: 0,
+        abil: 0, item: 0, leads: 0, ta: 0
+      };
+    }
+    const g = groups[key];
+    g.rows++;
+    g.games.add(r.gid);
+    if (r.won) g.wins.add(r.gid);
+    g.kd += r.kd || 0;
+    g.ki += r.ki || 0;
+    g.deaths += r.d || 0;
+    g.dout += r.dout || 0;
+    g.din += r.din || 0;
+    g.sw += r.sw || 0;
+    g.teras += r.tera || 0;
+    g.cp += r.cp || 0;
+    g.cm += r.cm || 0;
+    g.moves += r.moves || 0;
+    g.abil += r.abil || 0;
+    g.item += r.item || 0;
+    g.leads += r.lead || 0;
+    g.ta += r.ta || 0;
+  });
+
+  Object.values(groups).forEach(g => {
+    g.gp = g.games.size;
+    g.gw = g.wins.size;
+    g.kills = g.kd + g.ki;
+    g.kdr = g.deaths > 0 ? g.kills / g.deaths : g.kills;
+    g.winPct = g.gp > 0 ? g.gw / g.gp : 0;
+    g.dmgPerGame = g.gp > 0 ? g.dout / g.gp : 0;
+    g.kpg = g.gp > 0 ? g.kills / g.gp : 0;
+    g.teraRate = g.gp > 0 ? g.teras / g.gp : 0;
+    g.leadRate = g.gp > 0 ? g.leads / g.gp : 0;
+
+    if (metric === 'kills') g.value = g.kills;
+    else if (metric === 'kdr') g.value = g.kdr;
+    else if (metric === 'kpg') g.value = g.kpg;
+    else if (metric === 'winPct') g.value = g.winPct;
+    else if (metric === 'dmgPerGame') g.value = g.dmgPerGame;
+    else if (metric === 'teraRate') g.value = g.teraRate;
+    else if (metric === 'leadRate') g.value = g.leadRate;
+    else g.value = g[metric] || 0;
+
+    g.games = undefined;
+    g.wins = undefined;
+  });
+
+  return Object.values(groups).sort((a, b) => b.value - a.value);
+}
+
+function pivotEventStats(turnLog, gameLog, config) {
+  const { event, outcome, groupBy, filters, statusType, teraType } = config;
+
+  let filtered = turnLog.filter(t => {
+    if (event !== 'All' && t.event !== event) return false;
+    if (outcome && outcome !== 'All' && t.outcome !== outcome) return false;
+    if (filters.coach !== 'All' && t.coach !== filters.coach) return false;
+    if (filters.week !== 'All' && t.wk !== parseInt(filters.week)) return false;
+
+    if (event === 'STATUS' && statusType && statusType !== 'All') {
+      const detail = (t.detail || '').toLowerCase();
+      if (statusType === 'burn' && !detail.includes('burn')) return false;
+      if (statusType === 'paralysis' && !detail.includes('paralysis')) return false;
+      if (statusType === 'sleep' && !detail.includes('sleep')) return false;
+      if (statusType === 'poison' && !detail.includes('poison') && !detail.includes('toxic')) return false;
+      if (statusType === 'freeze' && !detail.includes('freeze')) return false;
+    }
+    if (event === 'TERA' && teraType && teraType !== 'All') {
+      if (t.outcome !== teraType) return false;
+    }
+    return true;
+  });
+
+  const groups = {};
+  filtered.forEach(t => {
+    if (!t.coach) return;
+    let key;
+    if (groupBy === 'mon') key = t.coach + '|' + (t.mon || '?');
+    else if (groupBy === 'coach') key = t.coach;
+    else if (groupBy === 'week') key = t.wk;
+    else if (groupBy === 'event') key = t.event;
+    else if (groupBy === 'detail') key = t.detail || t.outcome || '?';
+
+    if (!groups[key]) {
+      groups[key] = { key, coach: t.coach, mon: t.mon, wk: t.wk, count: 0 };
+    }
+    groups[key].count++;
+  });
+
+  return Object.values(groups).sort((a, b) => b.count - a.count);
+}
 const SPRITE_IDS = {
   'Alcremie': 869,
   'Alolan Muk': 10113,
@@ -1147,10 +1287,38 @@ function renderStandingsTable(state) {
 
 function renderPowerRankings(state) {
   const { data } = state;
-  const pr = powerRankings(data.gameLog);
-  const streaks = computeStreaks(data.gameLog);
-  const standings = coachStats(data.gameLog);
+  const maxWk = Math.max(...data.gameLog.map(r=>r.wk));
+  const asOfWk = state.standings.prWeek || maxWk;
+
+  // Filter game log to only include up to selected week
+  const filteredGl = data.gameLog.filter(r=>r.wk<=asOfWk);
+  const pr = powerRankings(filteredGl);
+  const streaks = computeStreaks(filteredGl);
+  const standings = coachStats(filteredGl);
   const ranked = Object.values(pr).sort((a,b)=>a.prRank-b.prRank);
+
+  // Week selector
+  const availableWeeks = [...new Set(data.gameLog.map(r=>r.wk))].sort((a,b)=>a-b);
+  const weekSelector = el('div', {
+    style:{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'1rem', flexWrap:'wrap' }
+  }, [
+    el('span',{style:{fontSize:'12px',color:'var(--color-text-tertiary)',fontWeight:'600',textTransform:'uppercase',letterSpacing:'0.6px'}},'As of week:'),
+    ...availableWeeks.map(wk => {
+      const active = wk === asOfWk;
+      return el('button', {
+        onclick: () => { state.standings.prWeek = wk; render(state); },
+        style: {
+          padding:'5px 12px', fontSize:'12px', fontWeight: active?'700':'500',
+          background: active?'var(--color-text-primary)':'var(--color-background-secondary)',
+          color: active?'var(--color-background-primary)':'var(--color-text-secondary)',
+          border:'0.5px solid var(--color-border-tertiary)',
+          borderRadius:'999px', cursor:'pointer', transition:'all 0.15s'
+        }
+      }, 'W'+wk);
+    }),
+    asOfWk < maxWk ? el('span',{style:{fontSize:'12px',color:'var(--color-text-tertiary)',fontStyle:'italic'}},
+      '← viewing historical rankings') : null
+  ].filter(x=>x));
 
   const streakBadge = (coach) => {
     const s = streaks[coach];
@@ -1208,8 +1376,9 @@ function renderPowerRankings(state) {
   });
 
   return el('div', {}, [
+    weekSelector,
     section('Power Rankings',
-      'Weighted by recency — recent weeks count up to 4× more than older weeks',
+      asOfWk < maxWk ? 'Historical — Week '+asOfWk+' power rankings' : 'Weighted by recency — recent weeks count 4× more than older weeks',
       el('div', { style:{padding:'16px 20px 20px'} }, cards)
     )
   ]);
@@ -1293,34 +1462,80 @@ function renderWeeklyRecap(state) {
     ]));
   }
 
-  // Results grid
+  // More weekly superlatives
+  const wekMons = monStats(wgl);
+  const allWekMons = Object.values(wekMons);
+  const topKiller = allWekMons.sort((a,b)=>b.tk-a.tk)[0];
+  const topDmg    = allWekMons.slice().sort((a,b)=>b.dout-a.dout)[0];
+  const topTera   = allWekMons.slice().sort((a,b)=>b.teras-a.teras)[0];
+
+  // Highlight card builder
+  const mkHL = (icon, label, coach, mon, val, clickFn) => {
+    const c = COACH_COLORS[coach]||'#888';
+    const card = el('div',{
+      onclick: clickFn,
+      style:{ padding:'14px 16px', background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-lg)', cursor:'pointer', flex:'1', minWidth:'160px' }
+    },[
+      el('div',{style:{fontSize:'10px',color:'var(--color-text-tertiary)',textTransform:'uppercase',letterSpacing:'0.6px',marginBottom:'8px'}},icon+' '+label),
+      el('div',{style:{display:'flex',alignItems:'center',gap:'8px',marginBottom:'6px'}},[
+        monSprite(mon,32),
+        el('div',{},[
+          el('div',{style:{fontWeight:'600',fontSize:'12px'}},mon),
+          el('div',{style:{marginTop:'3px'}},coachBadge(coach))
+        ])
+      ]),
+      el('div',{style:{fontFamily:'var(--font-display)',fontWeight:'700',fontSize:'17px',color:c}},val)
+    ]);
+    return card;
+  };
+
+  const extraHighlights = [
+    topKiller && topKiller.tk>0 ? mkHL('⚔️','Top killer',topKiller.coach,topKiller.mon,topKiller.tk+' kills',()=>{state.mdd.coach=topKiller.coach;state.mdd.mon=topKiller.mon;state.view='mon';render(state);}) : null,
+    topDmg ? mkHL('💥','Most damage',topDmg.coach,topDmg.mon,Math.round(topDmg.dout)+'%',()=>{state.mdd.coach=topDmg.coach;state.mdd.mon=topDmg.mon;state.view='mon';render(state);}) : null,
+    topTera && topTera.teras>0 ? mkHL('✨','Most teras',topTera.coach,topTera.mon,topTera.teras+'x',()=>{state.mdd.coach=topTera.coach;state.mdd.mon=topTera.mon;state.view='mon';render(state);}) : null,
+  ].filter(x=>x);
+
+  // Results grid with proper Bo3 scores
   const resultCards = results.map(res => {
     const wColor = COACH_COLORS[res.winner]||'#888';
-    return el('div',{
+    const lColor = COACH_COLORS[res.loser]||'#888';
+    const card = el('div',{
       onclick:()=>{state.h2h.c1=res.winner;state.h2h.c2=res.loser;state.view='h2h';render(state);},
       style:{
-        display:'flex',alignItems:'center',justifyContent:'space-between',
+        display:'flex', alignItems:'center', gap:'10px',
         padding:'12px 16px',
         background:'var(--color-background-secondary)',
         border:'0.5px solid '+wColor+'40',
         borderRadius:'var(--border-radius-lg)',
-        cursor:'pointer',transition:'all 0.15s'
+        cursor:'pointer', transition:'all 0.15s'
       }
     },[
-      coachBadge(res.winner),
-      el('div',{style:{textAlign:'center'}},[
-        el('div',{style:{fontFamily:'var(--font-display)',fontWeight:'700',fontSize:'20px',color:wColor}},res.wScore+'-'+res.lScore),
-        res.swept?el('div',{style:{fontSize:'10px',color:'var(--color-text-tertiary)',textTransform:'uppercase',letterSpacing:'0.5px'}},'sweep'):null
-      ].filter(x=>x)),
-      coachBadge(res.loser)
+      el('div',{style:{flex:'1',minWidth:'0'}},coachBadge(res.winner)),
+      el('div',{style:{textAlign:'center',flexShrink:'0'}},[
+        el('div',{style:{display:'flex',alignItems:'center',gap:'6px'}},[
+          el('span',{style:{fontFamily:'var(--font-display)',fontWeight:'700',fontSize:'18px',color:wColor}},String(res.wScore)),
+          el('span',{style:{color:'var(--color-text-tertiary)',fontSize:'14px'}},'-'),
+          el('span',{style:{fontFamily:'var(--font-display)',fontWeight:'700',fontSize:'18px',color:'var(--color-text-tertiary)'}},String(res.lScore)),
+        ]),
+        res.swept?el('div',{style:{fontSize:'9px',color:'var(--color-text-tertiary)',textTransform:'uppercase',letterSpacing:'0.5px'}},'sweep'):
+        el('div',{style:{fontSize:'9px',color:'var(--color-text-tertiary)',textTransform:'uppercase',letterSpacing:'0.5px'}},'Bo3')
+      ]),
+      el('div',{style:{flex:'1',minWidth:'0',display:'flex',justifyContent:'flex-end'}},coachBadge(res.loser))
     ]);
+    card.onmouseover=()=>{card.style.borderColor=wColor+'80';};
+    card.onmouseout=()=>{card.style.borderColor=wColor+'40';};
+    return card;
   });
 
   return el('div',{},[
-    section('Week '+wk+' Recap', 'Most recently completed week — click any result to open H2H',
+    section('Week '+wk+' Recap', 'Most recently completed week — all results and standouts',
       el('div',{},[
-        highlights.length>0?el('div',{style:{display:'flex',gap:'12px',flexWrap:'wrap',padding:'16px 20px 8px'}},highlights):null,
-        el('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))',gap:'10px',padding:'8px 20px 20px'}},resultCards)
+        highlights.length>0?el('div',{style:{display:'flex',gap:'10px',flexWrap:'wrap',padding:'16px 20px 8px'}},highlights):null,
+        extraHighlights.length>0?el('div',{style:{display:'flex',gap:'10px',flexWrap:'wrap',padding:'0 20px 8px'}},extraHighlights):null,
+        el('div',{style:{padding:'4px 20px 4px'}},[
+          el('div',{style:{fontSize:'11px',fontWeight:'600',color:'var(--color-text-tertiary)',textTransform:'uppercase',letterSpacing:'0.6px',marginBottom:'10px'}},'All results')
+        ]),
+        el('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))',gap:'8px',padding:'0 20px 20px'}},resultCards)
       ])
     )
   ]);
@@ -3457,36 +3672,52 @@ function activeGameLog(state) {
 }
 
 function applyTheme(dark) {
-  const root = document.documentElement;
-  if (dark) {
-    root.style.setProperty('--color-background-primary', '#13151c');
-    root.style.setProperty('--color-background-secondary', '#1a1d27');
-    root.style.setProperty('--color-background-tertiary', '#222535');
-    root.style.setProperty('--color-text-primary', '#e8eaed');
-    root.style.setProperty('--color-text-secondary', '#9aa0b2');
-    root.style.setProperty('--color-text-tertiary', '#5c6378');
-    root.style.setProperty('--color-border-tertiary', '#2a2d3d');
-    root.style.setProperty('--color-border-secondary', '#363a50');
-    root.style.setProperty('--color-text-success', '#4ade80');
-    root.style.setProperty('--color-text-danger', '#f87171');
-    root.style.setProperty('--color-text-warning', '#fbbf24');
-    root.style.setProperty('--color-background-success', '#166534a0');
-    root.style.setProperty('--color-background-danger', '#991b1ba0');
-  } else {
-    root.style.setProperty('--color-background-primary', '#ffffff');
-    root.style.setProperty('--color-background-secondary', '#f8f9fb');
-    root.style.setProperty('--color-background-tertiary', '#eef0f5');
-    root.style.setProperty('--color-text-primary', '#111827');
-    root.style.setProperty('--color-text-secondary', '#4b5563');
-    root.style.setProperty('--color-text-tertiary', '#9ca3af');
-    root.style.setProperty('--color-border-tertiary', '#e5e7eb');
-    root.style.setProperty('--color-border-secondary', '#d1d5db');
-    root.style.setProperty('--color-text-success', '#16a34a');
-    root.style.setProperty('--color-text-danger', '#dc2626');
-    root.style.setProperty('--color-text-warning', '#d97706');
-    root.style.setProperty('--color-background-success', '#dcfce7');
-    root.style.setProperty('--color-background-danger', '#fee2e2');
-  }
+  const el = document.documentElement;
+  const vars = dark ? {
+    '--color-background-primary':   '#13151c',
+    '--color-background-secondary': '#1a1d27',
+    '--color-background-tertiary':  '#222535',
+    '--color-background-success':   '#16653480',
+    '--color-background-danger':    '#991b1b80',
+    '--color-background-warning':   '#92400e80',
+    '--color-background-info':      '#1e3a5f',
+    '--color-text-primary':         '#e8eaed',
+    '--color-text-secondary':       '#9aa0b2',
+    '--color-text-tertiary':        '#5c6378',
+    '--color-text-success':         '#4ade80',
+    '--color-text-danger':          '#f87171',
+    '--color-text-warning':         '#fbbf24',
+    '--color-text-info':            '#7ab8ff',
+    '--color-border-primary':       'rgba(255,255,255,0.18)',
+    '--color-border-secondary':     'rgba(255,255,255,0.12)',
+    '--color-border-tertiary':      'rgba(255,255,255,0.08)',
+    '--color-border-success':       '#4ade80',
+    '--color-border-danger':        '#f87171',
+  } : {
+    '--color-background-primary':   '#ffffff',
+    '--color-background-secondary': '#f4f5f8',
+    '--color-background-tertiary':  '#e8eaef',
+    '--color-background-success':   '#dcfce7',
+    '--color-background-danger':    '#fee2e2',
+    '--color-background-warning':   '#fef3c7',
+    '--color-background-info':      '#dbeafe',
+    '--color-text-primary':         '#111827',
+    '--color-text-secondary':       '#4b5563',
+    '--color-text-tertiary':        '#9ca3af',
+    '--color-text-success':         '#16a34a',
+    '--color-text-danger':          '#dc2626',
+    '--color-text-warning':         '#d97706',
+    '--color-text-info':            '#2563eb',
+    '--color-border-primary':       'rgba(0,0,0,0.15)',
+    '--color-border-secondary':     '#d1d5db',
+    '--color-border-tertiary':      '#e5e7eb',
+    '--color-border-success':       '#16a34a',
+    '--color-border-danger':        '#dc2626',
+  };
+  Object.entries(vars).forEach(([k,v]) => el.style.setProperty(k, v));
+  // Also update body background directly for full-page coverage
+  document.body.style.background = dark ? '#13151c' : '#ffffff';
+  document.body.style.color = dark ? '#e8eaed' : '#111827';
 }
 
 // ── Search ─────────────────────────────────────────────────────────────────
@@ -3507,48 +3738,50 @@ function buildSearchIndex(data) {
 function renderSearch(state) {
   if (!state.searchOpen) return null;
   const index = buildSearchIndex(state.data);
-  const q = (state.searchQuery || '').toLowerCase().trim();
-  const filtered = q ? index.filter(r => r.label.toLowerCase().includes(q) || r.sub.toLowerCase().includes(q)).slice(0, 10) : index.slice(0, 8);
 
   const backdrop = el('div', {
     onclick: () => { state.searchOpen = false; state.searchQuery = ''; render(state); },
     style: { position: 'fixed', inset: '0', background: 'rgba(0,0,0,0.5)', zIndex: '999' }
   });
 
-  const searchInput = el('input', {
-    type: 'text', placeholder: 'Search coaches or Pokémon...',
-    value: state.searchQuery || '',
-    style: {
-      width: '100%', padding: '16px 20px', fontSize: '16px',
-      background: 'transparent', border: 'none', outline: 'none',
-      color: 'var(--color-text-primary)', fontFamily: 'var(--font-sans)',
-      boxSizing: 'border-box'
+  const resultsDiv = el('div', { style: { maxHeight: '400px', overflowY: 'auto' } });
+
+  function updateResults(q) {
+    resultsDiv.innerHTML = '';
+    const filtered = q ? index.filter(r => r.label.toLowerCase().includes(q.toLowerCase()) || r.sub.toLowerCase().includes(q.toLowerCase())).slice(0, 10) : index.slice(0, 8);
+    if (filtered.length === 0) {
+      const empty = el('div', { style: { padding: '24px 20px', textAlign: 'center', color: 'var(--color-text-tertiary)', fontSize: '14px' } }, q ? 'No results for "' + q + '"' : 'Start typing...');
+      resultsDiv.appendChild(empty);
+      return;
     }
-  });
-  searchInput.oninput = (e) => { state.searchQuery = e.target.value; render(state); };
+    filtered.forEach(r => {
+      const iconEl = r.type === 'coach'
+        ? el('div', { style: { width: '32px', height: '32px', borderRadius: '50%', background: (COACH_COLORS[r.label]||'#888'), display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '13px', fontWeight: '700', flexShrink: '0' } }, r.label.charAt(0))
+        : el('div', { style: { flexShrink: '0' } }, monSprite(r.label, 32));
+      const item = el('div', {
+        onclick: () => { r.action(state); state.searchOpen = false; state.searchQuery = ''; render(state); },
+        style: { display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 20px', cursor: 'pointer', transition: 'background 0.1s' }
+      }, [
+        iconEl,
+        el('div', {}, [
+          el('div', { style: { fontWeight: '600', fontSize: '14px' } }, r.label),
+          el('div', { style: { fontSize: '12px', color: 'var(--color-text-tertiary)', marginTop: '2px' } }, r.sub)
+        ])
+      ]);
+      item.onmouseover = () => { item.style.background = 'var(--color-background-secondary)'; };
+      item.onmouseout  = () => { item.style.background = ''; };
+      resultsDiv.appendChild(item);
+    });
+  }
 
-  const resultEls = filtered.map(r => {
-    const iconEl = r.type === 'coach'
-      ? el('div', { style: { width: '32px', height: '32px', borderRadius: '50%', background: (COACH_COLORS[r.label]||'#888'), display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '13px', fontWeight: '700', flexShrink: '0' } }, r.label.charAt(0))
-      : el('div', { style: { flexShrink: '0' } }, monSprite(r.label, 32));
+  // Create input WITHOUT value attribute — never re-render on keystroke
+  const searchInput = document.createElement('input');
+  searchInput.type = 'text';
+  searchInput.placeholder = 'Search coaches or Pokémon...';
+  searchInput.style.cssText = 'width:100%;padding:16px 20px;font-size:16px;background:transparent;border:none;outline:none;color:var(--color-text-primary);font-family:var(--font-sans);box-sizing:border-box;';
+  searchInput.oninput = (e) => { state.searchQuery = e.target.value; updateResults(e.target.value); };
 
-    const item = el('div', {
-      onclick: () => { r.action(state); state.searchOpen = false; state.searchQuery = ''; render(state); },
-      style: {
-        display: 'flex', alignItems: 'center', gap: '12px',
-        padding: '12px 20px', cursor: 'pointer', transition: 'background 0.1s'
-      }
-    }, [
-      iconEl,
-      el('div', {}, [
-        el('div', { style: { fontWeight: '600', fontSize: '14px' } }, r.label),
-        el('div', { style: { fontSize: '12px', color: 'var(--color-text-tertiary)', marginTop: '2px' } }, r.sub)
-      ])
-    ]);
-    item.onmouseover = () => { item.style.background = 'var(--color-background-secondary)'; };
-    item.onmouseout  = () => { item.style.background = ''; };
-    return item;
-  });
+  updateResults(state.searchQuery || '');
 
   const modal = el('div', {
     style: {
@@ -3561,17 +3794,15 @@ function renderSearch(state) {
       zIndex: '1000', overflow: 'hidden'
     }
   }, [
-    el('div', { style: { borderBottom: '0.5px solid var(--color-border-tertiary)', display: 'flex', alignItems: 'center', padding: '0 20px', gap: '12px' } }, [
+    el('div', { style: { borderBottom: '0.5px solid var(--color-border-tertiary)', display: 'flex', alignItems: 'center', paddingLeft: '20px', gap: '12px' } }, [
       el('span', { style: { fontSize: '18px', color: 'var(--color-text-tertiary)' } }, '🔍'),
-      searchInput
     ]),
-    resultEls.length > 0
-      ? el('div', { style: { maxHeight: '400px', overflowY: 'auto' } }, resultEls)
-      : el('div', { style: { padding: '24px 20px', textAlign: 'center', color: 'var(--color-text-tertiary)', fontSize: '14px' } }, q ? 'No results for "' + q + '"' : 'Start typing...')
+    resultsDiv
   ]);
 
-  // Auto-focus the input after render
-  setTimeout(() => searchInput.focus(), 50);
+  // Inject the raw input into the header div
+  modal.firstChild.appendChild(searchInput);
+  setTimeout(() => { searchInput.focus(); if (state.searchQuery) searchInput.value = state.searchQuery; }, 30);
 
   return el('div', {}, [backdrop, modal]);
 }
