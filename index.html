@@ -249,11 +249,26 @@ function coachStats(gameLog) {
     s.seriesWon = undefined;
   });
 
-  // New ranking: series wins → league points → +/- → total kills → coach name
+  // Ranking: series wins → league points → +/- → h2h → total kills → coach name
+  // H2H tiebreaker: who won the regular season series between the two tied coaches?
+  function h2hResult(coachA, coachB) {
+    // Returns positive if A beat B, negative if B beat A, 0 if tied/not played
+    const gids = new Set();
+    gameLog.forEach(r => { if (r.coach === coachA && r.opp === coachB) gids.add(r.gid); });
+    if (gids.size === 0) return 0;
+    const gameWinners = {};
+    gameLog.forEach(r => { if (gids.has(r.gid) && r.won && !gameWinners[r.gid]) gameWinners[r.gid] = r.coach; });
+    const aWins = Object.values(gameWinners).filter(w => w === coachA).length;
+    const bWins = Object.values(gameWinners).filter(w => w === coachB).length;
+    return aWins - bWins;
+  }
+
   const ranked = Object.values(stats).sort((a, b) => {
     if (b.sw_series !== a.sw_series) return b.sw_series - a.sw_series;
     if (b.leaguePoints !== a.leaguePoints) return b.leaguePoints - a.leaguePoints;
     if (b.plusMinus !== a.plusMinus) return b.plusMinus - a.plusMinus;
+    const h2h = h2hResult(b.coach, a.coach);
+    if (h2h !== 0) return h2h;
     if (b.kills !== a.kills) return b.kills - a.kills;
     return a.coach.localeCompare(b.coach);
   });
