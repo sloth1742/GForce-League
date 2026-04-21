@@ -182,29 +182,32 @@ function coachStats(gameLog) {
 
     const sid = 'W'+r.wk+'-M'+r.m;
     if (!seriesMap[sid]) seriesMap[sid] = {};
-    if (!seriesMap[sid][r.coach]) seriesMap[sid][r.coach] = {w:0,l:0,opp:r.opp};
-    if (r.won) seriesMap[sid][r.coach].w++; else seriesMap[sid][r.coach].l++;
+    if (!seriesMap[sid][r.coach]) seriesMap[sid][r.coach] = {gids:new Set(), gwGids:new Set(), opp:r.opp};
+    seriesMap[sid][r.coach].gids.add(r.gid);
+    if (r.won) seriesMap[sid][r.coach].gwGids.add(r.gid);
   });
 
   Object.entries(seriesMap).forEach(([sid, coaches]) => {
     const arr = Object.entries(coaches);
     if (arr.length !== 2) return;
     const [[cA, sA],[cB, sB]] = arr;
+    // Count unique game wins, not rows
+    const aW = sA.gwGids.size, aL = sA.gids.size - sA.gwGids.size;
+    const bW = sB.gwGids.size, bL = sB.gids.size - sB.gwGids.size;
     [cA,cB].forEach(c => { if (stats[c]) stats[c].seriesPlayed.add(sid); stats[c] && stats[c].sp++; });
-    const aWon = sA.w > sB.w, bWon = sB.w > sA.w;
+    const aWon = aW > bW, bWon = bW > aW;
     const sw = aWon ? cA : bWon ? cB : null;
     const sl = aWon ? cB : bWon ? cA : null;
-    const score = aWon ? [sA.w, sB.w] : [sB.w, sA.w];
+    const [wW, wL] = aWon ? [aW, aL] : [bW, bL];
     if (sw && stats[sw]) {
       stats[sw].seriesWon.add(sid);
-      const [w,l] = score;
-      if (w===2&&l===0) stats[sw].leaguePoints += 3;
-      else if (w===2&&l===1) stats[sw].leaguePoints += 2;
+      if (wW===2&&wL===0) stats[sw].leaguePoints += 3;
+      else if (wW===2&&wL===1) stats[sw].leaguePoints += 2;
     }
     if (sl && stats[sl]) {
       stats[sl].seriesLost.add(sid);
-      const [w,l] = [aWon?sB.w:sA.w, aWon?sA.w:sB.w];
-      if (w===1&&l===2) stats[sl].leaguePoints += 1;
+      const [lW] = aWon ? [bW] : [aW];
+      if (lW===1) stats[sl].leaguePoints += 1;
     }
   });
 
