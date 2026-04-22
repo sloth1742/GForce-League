@@ -2122,8 +2122,7 @@ function viewCoachPanel(state) {
       insights.topDamage ? mkInsight('Top damage', 'D', insights.topDamage.mon, formatDmg(insights.topDamage.dout), formatInt(insights.topDamage.dmgPerGame) + '% per game') : null,
       insights.topKiller ? mkInsight('Top killer', 'K', insights.topKiller.mon, insights.topKiller.tk + ' kills', formatKDR(insights.topKiller.kdr) + ' K/D') : null,
       insights.topProtector ? mkInsight('Protect blocks', 'P', insights.topProtector[0], insights.topProtector[1] + ' blocks', 'defensive pivot') : null,
-      insights.topTeraUser ? mkInsight('Tera devotee', 'T', insights.topTeraUser[0], insights.topTeraUser[1] + ' teras', 'clutch commits') : null,
-      insights.topTeraUser ? mkInsight('Top Tera user', 'T', insights.topTeraUser[0], insights.topTeraUser[1] + ' teras', 'clutch commits') : null
+      insights.topTeraUser ? mkInsight('Tera devotee', 'T', insights.topTeraUser[0], insights.topTeraUser[1] + ' teras', 'clutch commits') : null
     ].filter(x => x);
 
     insightsSection = section('Team insights', 'Click any card to see that Pokemon in detail',
