@@ -162,24 +162,20 @@ function coachStats(gameLog) {
     };
   });
 
-  // Build series results
   const seriesMap = {};
   gameLog.forEach(r => {
     const s = stats[r.coach]; if (!s) return;
-    // Count stats per row (mon-level)
     s.kills += (r.kd||0)+(r.ki||0); s.deaths += r.d||0;
     s.dmg += r.dout||0; s.sw += r.sw||0;
     s.abil += r.abil||0; s.item += r.item||0;
     s.cp += r.cp||0; s.cm += r.cm||0; s.teras += r.tera||0;
-    // Count games by unique gid (not rows)
     if (!s.gids.has(r.gid)) {
       s.gids.add(r.gid);
       s.gp++;
       if (r.won) { s.gw++; s.gwGids.add(r.gid); } else s.gl++;
     } else {
-      if (r.won) s.gwGids.add(r.gid); // ensure won tracked
+      if (r.won) s.gwGids.add(r.gid);
     }
-
     const sid = 'W'+r.wk+'-M'+r.m;
     if (!seriesMap[sid]) seriesMap[sid] = {};
     if (!seriesMap[sid][r.coach]) seriesMap[sid][r.coach] = {gids:new Set(), gwGids:new Set(), opp:r.opp};
@@ -191,10 +187,9 @@ function coachStats(gameLog) {
     const arr = Object.entries(coaches);
     if (arr.length !== 2) return;
     const [[cA, sA],[cB, sB]] = arr;
-    // Count unique game wins, not rows
     const aW = sA.gwGids.size, aL = sA.gids.size - sA.gwGids.size;
     const bW = sB.gwGids.size, bL = sB.gids.size - sB.gwGids.size;
-    [cA,cB].forEach(c => { if (stats[c]) stats[c].seriesPlayed.add(sid); stats[c] && stats[c].sp++; });
+    [cA,cB].forEach(c => { if (stats[c]) { stats[c].seriesPlayed.add(sid); stats[c].sp++; } });
     const aWon = aW > bW, bWon = bW > aW;
     const sw = aWon ? cA : bWon ? cB : null;
     const sl = aWon ? cB : bWon ? cA : null;
@@ -206,12 +201,11 @@ function coachStats(gameLog) {
     }
     if (sl && stats[sl]) {
       stats[sl].seriesLost.add(sid);
-      const [lW] = aWon ? [bW] : [aW];
+      const lW = aWon ? bW : aW;
       if (lW===1) stats[sl].leaguePoints += 1;
     }
   });
 
-  // H2H helper
   function h2hResult(coachA, coachB) {
     const gids = new Set();
     gameLog.forEach(r => { if (r.coach===coachA && r.opp===coachB) gids.add(r.gid); });
@@ -236,7 +230,6 @@ function coachStats(gameLog) {
     s.seriesPlayed = undefined; s.seriesWon = undefined; s.seriesLost = undefined;
   });
 
-  // Ranking: SW → LP → +/- → H2H → kills → alpha
   const ranked = Object.values(stats).sort((a,b) => {
     if (b.sw_series !== a.sw_series) return b.sw_series - a.sw_series;
     if (b.leaguePoints !== a.leaguePoints) return b.leaguePoints - a.leaguePoints;
@@ -272,22 +265,29 @@ function monStats(gameLog) {
     s.winPct = s.gp>0 ? s.gw/s.gp : 0;
     s.kdr = s.deaths>0 ? s.tk/s.deaths : s.tk;
     s.dmgPerGame = s.gp>0 ? s.dout/s.gp : 0;
+    s.dmgPerTurn = s.ta>0 ? s.dout/s.ta : 0;
     s.mvp = s.tk*3 + s.deaths*-1 + s.gw*2 + s.teras*1;
   });
   return stats;
 }
 
-// ── Power Rankings ────────────────────────────────────────────────────────────
-
-// ── Streaks ───────────────────────────────────────────────────────────────────
-
 // ── Carry Score ───────────────────────────────────────────────────────────────
-
-// ── Superlatives ──────────────────────────────────────────────────────────────
+function computeCarryScore(gameLog, coach) {
+  const cgl = gameLog.filter(r => r.coach === coach);
+  const monScores = {};
+  cgl.forEach(r => {
+    if (!monScores[r.mon]) monScores[r.mon] = {mon:r.mon, tk:0, dout:0};
+    monScores[r.mon].tk += (r.kd||0)+(r.ki||0);
+    monScores[r.mon].dout += r.dout||0;
+  });
+  const total = Object.values(monScores).reduce((s,m) => s + m.tk*3 + m.dout/10, 0);
+  if (!total) return {mon:'—', pct:0};
+  const top = Object.values(monScores).sort((a,b)=>(b.tk*3+b.dout/10)-(a.tk*3+a.dout/10))[0];
+  return {mon:top.mon, pct:Math.round((top.tk*3+top.dout/10)/total*100)};
+}
 
 // ── Weekly Recap ──────────────────────────────────────────────────────────────
 function computeWeeklyRecap(gameLog, moveLog, turnLog, targetWk) {
-  // Find all fully-played weeks (6 matches)
   const weekMatches = {};
   gameLog.forEach(r => {
     if (!weekMatches[r.wk]) weekMatches[r.wk] = new Set();
@@ -304,13 +304,11 @@ function computeWeeklyRecap(gameLog, moveLog, turnLog, targetWk) {
   const wml = moveLog.filter(r=>r.wk===wk);
   const wtl = turnLog.filter(r=>r.wk===wk);
 
-  // Series results — count unique game wins, not rows
   const series = {};
   wgl.forEach(r => {
     const sid = 'M'+r.m;
     if (!series[sid]) series[sid] = {m:r.m, opp:{}, gameWinners:{}};
     if (!series[sid].opp[r.coach]) series[sid].opp[r.coach] = r.opp;
-    // Track game winner by gid (first won=true row per gid wins it)
     if (r.won && !series[sid].gameWinners[r.gid]) series[sid].gameWinners[r.gid] = r.coach;
   });
 
@@ -325,12 +323,10 @@ function computeWeeklyRecap(gameLog, moveLog, turnLog, targetWk) {
     const loser  = aW >= bW ? cB : cA;
     const wScore = Math.max(aW, bW);
     const lScore = Math.min(aW, bW);
-    const gamesPlayed = Object.keys(s.gameWinners).length;
     const swept = wScore===2 && lScore===0;
-    return {m:s.m, winner, loser, wScore, lScore, swept, gamesPlayed};
+    return {m:s.m, winner, loser, wScore, lScore, swept};
   }).filter(x=>x).sort((a,b)=>a.m-b.m);
 
-  // Week MVP: highest kills + damage among all mons this week
   const monScores = {};
   wgl.forEach(r=>{
     const k=r.coach+'|'+r.mon;
@@ -342,56 +338,45 @@ function computeWeeklyRecap(gameLog, moveLog, turnLog, targetWk) {
   });
   const weekMVP = Object.values(monScores).sort((a,b)=>(b.tk*3+b.gw*2+b.dout/20)-(a.tk*3+a.gw*2+a.dout/20))[0];
 
-  // Biggest upset: lower-ranked team (by current standing) beating higher-ranked
   const standings = coachStats(gameLog);
   let biggestUpset = null;
   results.forEach(res => {
     const winnerRank = standings[res.winner]?.rank || 99;
     const loserRank  = standings[res.loser]?.rank  || 99;
     if (winnerRank > loserRank) {
-      if (!biggestUpset || (winnerRank - loserRank) > (standings[biggestUpset.winner]?.rank||0)-(standings[biggestUpset.loser]?.rank||0)) {
+      if (!biggestUpset || (winnerRank - loserRank) > ((standings[biggestUpset.winner]?.rank||0)-(standings[biggestUpset.loser]?.rank||0))) {
         biggestUpset = res;
       }
     }
   });
 
-  // Most dominant: biggest game differential
   const mostDominant = results.reduce((best, r) => {
     const diff = r.wScore - r.lScore;
-    return (!best || diff > (best.wScore-best.lScore) || (diff===(best.wScore-best.lScore)&&r.swept)) ? r : best;
+    return (!best || diff > (best.wScore-best.lScore)) ? r : best;
   }, null);
 
-  // Closest series: went to game 3
   const closestSeries = results.filter(r=>r.lScore===1);
 
   return { wk, results, weekMVP, biggestUpset, mostDominant, closestSeries, wgl, wml, wtl };
 }
 
-
-
-// ── Missing pivot/move functions (carried from v93) ──────────────────────────
-
+// ── Pivot helpers ─────────────────────────────────────────────────────────────
 function monMoveStats(moveLog, coach, mon) {
   const moves = {};
   moveLog.filter(r => r.coach === coach && r.mon === mon).forEach(r => {
-    if (!moves[r.move]) moves[r.move] = { move: r.move, uses: 0, dmg: 0 };
-    moves[r.move].uses += r.uses || 0;
-    moves[r.move].dmg += r.dmg || 0;
+    if (!moves[r.move]) moves[r.move] = {move:r.move, uses:0, dmg:0, avg:0};
+    moves[r.move].uses += r.uses||0;
+    moves[r.move].dmg += r.dmg||0;
   });
-  return Object.values(moves).map(m => ({
-    move: m.move,
-    uses: m.uses,
-    dmg: m.dmg,
-    avg: m.uses > 0 ? m.dmg / m.uses : 0
-  })).sort((a, b) => b.uses - a.uses);
+  return Object.values(moves).sort((a,b)=>b.uses-a.uses);
 }
 
 function pivotGameStats(gameLog, config) {
   const { metric, groupBy, filters } = config;
   const filtered = gameLog.filter(r => {
-    if (filters.coach !== 'All' && r.coach !== filters.coach) return false;
-    if (filters.week !== 'All' && r.wk !== parseInt(filters.week)) return false;
-    if (filters.opponent !== 'All' && r.opp !== filters.opponent) return false;
+    if (filters.coach && r.coach !== filters.coach) return false;
+    if (filters.opp && r.opp !== filters.opp) return false;
+    if (filters.week && r.wk !== parseInt(filters.week)) return false;
     if (filters.teraOnly === 'yes' && !r.tera) return false;
     if (filters.teraOnly === 'no' && r.tera) return false;
     if (filters.leadOnly === 'yes' && !r.lead) return false;
@@ -400,112 +385,55 @@ function pivotGameStats(gameLog, config) {
     if (filters.wonOnly === 'no' && r.won) return false;
     return true;
   });
-
   const groups = {};
   filtered.forEach(r => {
-    let key;
-    if (groupBy === 'mon') key = r.coach + '|' + r.mon;
-    else if (groupBy === 'coach') key = r.coach;
-    else if (groupBy === 'week') key = r.wk;
-    else if (groupBy === 'opponent') key = r.opp;
-
-    if (!groups[key]) {
-      groups[key] = {
-        key, coach: r.coach, mon: r.mon, wk: r.wk, opp: r.opp,
-        rows: 0, games: new Set(), wins: new Set(),
-        value: 0,
-        kd: 0, ki: 0, deaths: 0, dout: 0, din: 0,
-        sw: 0, teras: 0, cp: 0, cm: 0, moves: 0,
-        abil: 0, item: 0, leads: 0, ta: 0
-      };
-    }
+    const key = groupBy === 'coach' ? r.coach : groupBy === 'mon' ? r.coach+'|'+r.mon : r.coach+'|'+r.opp;
+    if (!groups[key]) groups[key] = {coach:r.coach, mon:r.mon, opp:r.opp, gp:0, gw:0, dout:0, din:0, tk:0, deaths:0, ta:0};
     const g = groups[key];
-    g.rows++;
-    g.games.add(r.gid);
-    if (r.won) g.wins.add(r.gid);
-    g.kd += r.kd || 0;
-    g.ki += r.ki || 0;
-    g.deaths += r.d || 0;
-    g.dout += r.dout || 0;
-    g.din += r.din || 0;
-    g.sw += r.sw || 0;
-    g.teras += r.tera || 0;
-    g.cp += r.cp || 0;
-    g.cm += r.cm || 0;
-    g.moves += r.moves || 0;
-    g.abil += r.abil || 0;
-    g.item += r.item || 0;
-    g.leads += r.lead || 0;
-    g.ta += r.ta || 0;
+    g.gp++; if (r.won) g.gw++;
+    g.dout+=r.dout||0; g.din+=r.din||0;
+    g.tk+=(r.kd||0)+(r.ki||0); g.deaths+=r.d||0; g.ta+=r.ta||0;
   });
-
-  Object.values(groups).forEach(g => {
-    g.gp = g.games.size;
-    g.gw = g.wins.size;
-    g.kills = g.kd + g.ki;
-    g.kdr = g.deaths > 0 ? g.kills / g.deaths : g.kills;
-    g.winPct = g.gp > 0 ? g.gw / g.gp : 0;
-    g.dmgPerGame = g.gp > 0 ? g.dout / g.gp : 0;
-    g.kpg = g.gp > 0 ? g.kills / g.gp : 0;
-    g.teraRate = g.gp > 0 ? g.teras / g.gp : 0;
-    g.leadRate = g.gp > 0 ? g.leads / g.gp : 0;
-
-    if (metric === 'kills') g.value = g.kills;
-    else if (metric === 'kdr') g.value = g.kdr;
-    else if (metric === 'kpg') g.value = g.kpg;
-    else if (metric === 'winPct') g.value = g.winPct;
-    else if (metric === 'dmgPerGame') g.value = g.dmgPerGame;
-    else if (metric === 'teraRate') g.value = g.teraRate;
-    else if (metric === 'leadRate') g.value = g.leadRate;
-    else g.value = g[metric] || 0;
-
-    g.games = undefined;
-    g.wins = undefined;
-  });
-
-  return Object.values(groups).sort((a, b) => b.value - a.value);
+  return Object.values(groups).map(g => {
+    g.winPct = g.gp>0?g.gw/g.gp:0;
+    g.kdr = g.deaths>0?g.tk/g.deaths:g.tk;
+    g.dmgPerGame = g.gp>0?g.dout/g.gp:0;
+    g.dmgPerTurn = g.ta>0?g.dout/g.ta:0;
+    if (metric==='dout') g.value=g.dout;
+    else if (metric==='din') g.value=g.din;
+    else if (metric==='tk') g.value=g.tk;
+    else if (metric==='deaths') g.value=g.deaths;
+    else if (metric==='kdr') g.value=g.kdr;
+    else if (metric==='winPct') g.value=g.winPct;
+    else if (metric==='dmgPerGame') g.value=g.dmgPerGame;
+    else if (metric==='dmgPerTurn') g.value=g.dmgPerTurn;
+    else g.value=g.gp;
+    return g;
+  }).filter(g=>g.gp>=(config.minGP||1)).sort((a,b)=>b.value-a.value);
 }
 
 function pivotEventStats(turnLog, gameLog, config) {
-  const { event, outcome, groupBy, filters, statusType, teraType } = config;
-
-  let filtered = turnLog.filter(t => {
-    if (event !== 'All' && t.event !== event) return false;
-    if (outcome && outcome !== 'All' && t.outcome !== outcome) return false;
-    if (filters.coach !== 'All' && t.coach !== filters.coach) return false;
-    if (filters.week !== 'All' && t.wk !== parseInt(filters.week)) return false;
-
-    if (event === 'STATUS' && statusType && statusType !== 'All') {
-      const detail = (t.detail || '').toLowerCase();
-      if (statusType === 'burn' && !detail.includes('burn')) return false;
-      if (statusType === 'paralysis' && !detail.includes('paralysis')) return false;
-      if (statusType === 'sleep' && !detail.includes('sleep')) return false;
-      if (statusType === 'poison' && !detail.includes('poison') && !detail.includes('toxic')) return false;
-      if (statusType === 'freeze' && !detail.includes('freeze')) return false;
-    }
-    if (event === 'TERA' && teraType && teraType !== 'All') {
-      if (t.outcome !== teraType) return false;
-    }
+  const { event, outcome, groupBy, filters, statusType } = config;
+  const gidSet = new Set(gameLog.filter(r => {
+    if (filters.coach && r.coach !== filters.coach) return false;
+    if (filters.week && r.wk !== parseInt(filters.week)) return false;
+    return true;
+  }).map(r=>r.gid));
+  const filtered = turnLog.filter(r => {
+    if (!gidSet.has(r.gid)) return false;
+    if (event !== 'ALL' && r.event !== event) return false;
+    if (outcome && outcome !== 'All' && r.outcome !== outcome) return false;
+    if (statusType && statusType !== 'All' && event==='STATUS' && r.detail !== statusType) return false;
+    if (filters.coach && r.coach !== filters.coach) return false;
     return true;
   });
-
   const groups = {};
-  filtered.forEach(t => {
-    if (!t.coach) return;
-    let key;
-    if (groupBy === 'mon') key = t.coach + '|' + (t.mon || '?');
-    else if (groupBy === 'coach') key = t.coach;
-    else if (groupBy === 'week') key = t.wk;
-    else if (groupBy === 'event') key = t.event;
-    else if (groupBy === 'detail') key = t.detail || t.outcome || '?';
-
-    if (!groups[key]) {
-      groups[key] = { key, coach: t.coach, mon: t.mon, wk: t.wk, count: 0 };
-    }
+  filtered.forEach(r => {
+    const key = groupBy === 'coach' ? r.coach : r.coach+'|'+r.mon;
+    if (!groups[key]) groups[key] = {coach:r.coach, mon:r.mon, count:0};
     groups[key].count++;
   });
-
-  return Object.values(groups).sort((a, b) => b.count - a.count);
+  return Object.values(groups).sort((a,b)=>b.count-a.count);
 }
 const SPRITE_IDS = {
   'Alcremie': 869,
@@ -751,9 +679,11 @@ const el = (tag, attrs, children) => {
     if (k === 'style') Object.assign(e.style, attrs[k]);
     else if (k === 'onclick') e.onclick = attrs[k];
     else if (k === 'onchange') e.onchange = attrs[k];
+    else if (k === 'oninput') e.oninput = attrs[k];
     else if (k === 'onmouseover') e.onmouseover = attrs[k];
     else if (k === 'onmouseout') e.onmouseout = attrs[k];
     else if (k === 'html') e.innerHTML = attrs[k];
+    else if (k === 'value') { e.setAttribute(k, attrs[k]); e.value = attrs[k]; }
     else e.setAttribute(k, attrs[k]);
   }
   if (children) {
@@ -1032,6 +962,389 @@ function monLink(coach, mon, options) {
   wrap.onmouseover = () => wrap.style.background = 'var(--color-background-secondary)';
   wrap.onmouseout = () => wrap.style.background = '';
   return wrap;
+}
+// ============================================================
+// TOOLTIP SYSTEM
+// ============================================================
+const TOOLTIPS = {
+  // Stat labels
+  'MVP':        'MVP score: +3 per kill, -1 per death, +2 per win, +1 per Tera',
+  'K/D':        'Kill/death ratio: total kills divided by total deaths',
+  'K':          'Kills: direct knockouts (KD) plus indirect knockouts (KI)',
+  'KD':         'Direct kills: Pokémon knocked out by this mon\'s moves',
+  'KI':         'Indirect kills: knockouts caused by status, recoil, or items',
+  'D':          'Deaths: times this Pokémon was knocked out',
+  'Win%':       'Win rate: games won divided by games played',
+  'Dmg':        'Total damage dealt as a percentage of opponent\'s total HP',
+  'Dmg/G':      'Average damage per game played',
+  'Dmg/T':      'Average damage per turn alive — efficiency rating',
+  'dmgPerGame': 'Average damage output per game played',
+  'dmgPerTurn': 'Damage per turn alive — measures offensive efficiency regardless of game length',
+  '+/-':        'Plus/minus: games won minus games lost',
+  'LP':         'League points: 3 for a 2-0 sweep, 2 for a 2-1 win, 1 for a 1-2 loss',
+  'SW':         'Series wins',
+  'SL':         'Series losses',
+  'GP':         'Games played (individual games, not series)',
+  'GW':         'Games won',
+  'GL':         'Games lost',
+  'W-L':        'Win-loss record in individual games',
+  'Tera':       'Number of times this Pokémon terastallized',
+  'Lead%':      'How often this Pokémon is selected as a lead',
+  'Carry':      'Carry score: this mon\'s share of the team\'s total kills + damage contribution',
+};
+
+// Singleton tooltip element
+let _tooltipEl = null;
+function getTooltip() {
+  if (!_tooltipEl) {
+    _tooltipEl = document.createElement('div');
+    _tooltipEl.id = 'gforce-tooltip';
+    _tooltipEl.style.cssText = `
+      position:fixed;pointer-events:none;z-index:9999;
+      background:var(--color-background-primary);
+      border:0.5px solid var(--color-border-secondary);
+      border-radius:var(--border-radius-md);
+      padding:7px 11px;font-size:12px;line-height:1.4;
+      color:var(--color-text-secondary);
+      box-shadow:0 4px 20px rgba(0,0,0,0.35);
+      max-width:260px;opacity:0;transition:opacity 0.12s;
+    `;
+    document.body.appendChild(_tooltipEl);
+  }
+  return _tooltipEl;
+}
+
+function showTooltip(text, e) {
+  const tip = getTooltip();
+  tip.textContent = text;
+  tip.style.opacity = '1';
+  positionTooltip(e);
+}
+
+function positionTooltip(e) {
+  const tip = getTooltip();
+  const x = e.clientX + 14;
+  const y = e.clientY - 10;
+  const tw = tip.offsetWidth || 200;
+  const th = tip.offsetHeight || 40;
+  tip.style.left = (x + tw > window.innerWidth - 8 ? x - tw - 20 : x) + 'px';
+  tip.style.top  = (y + th > window.innerHeight - 8 ? y - th - 4 : y) + 'px';
+}
+
+function hideTooltip() {
+  getTooltip().style.opacity = '0';
+}
+
+// Wrap any element with tooltip behaviour
+function withTooltip(el, text) {
+  if (!text) return el;
+  el.style.cursor = 'help';
+  el.addEventListener('mouseenter', (e) => showTooltip(text, e));
+  el.addEventListener('mousemove',  (e) => positionTooltip(e));
+  el.addEventListener('mouseleave', () => hideTooltip());
+  return el;
+}
+
+// Wrap a stat label string → returns a span with tooltip if known
+function statLabel(label, overrideText) {
+  const tipText = overrideText || TOOLTIPS[label];
+  const span = document.createElement('span');
+  span.textContent = label;
+  if (tipText) {
+    span.style.borderBottom = '1px dashed var(--color-text-tertiary)';
+    withTooltip(span, tipText);
+  }
+  return span;
+}
+
+// ============================================================
+// POKEAPI INTEGRATION
+// ============================================================
+const POKEAPI_BASE = 'https://pokeapi.co/api/v2';
+
+const POKEAPI_SLUG_MAP = {
+  'Alolan Muk': 'muk-alola',
+  'Alolan Ninetales': 'ninetales-alola',
+  'Alolan Raichu': 'raichu-alola',
+  'Basculegion': 'basculegion-male',
+  'Galarian Weezing': 'weezing-galar',
+  'Hisuian Arcanine': 'arcanine-hisui',
+  'Hisuian Avalugg': 'avalugg-hisui',
+  'Hisuian Braviary': 'braviary-hisui',
+  'Hisuian Decidueye': 'decidueye-hisui',
+  'Hisuian Goodra': 'goodra-hisui',
+  'Hisuian Lilligant': 'lilligant-hisui',
+  'Hisuian Sliggoo': 'sliggoo-hisui',
+  'Hisuian Typhlosion': 'typhlosion-hisui',
+  'Hisuian Zoroark': 'zoroark-hisui',
+  'Indeedee-Female': 'indeedee-f',
+  'Minior': 'minior-red-meteor',
+  'Oricorio': 'oricorio-baile',
+  'Oricorio-Sensu': 'oricorio-sensu',
+  'Palafin': 'palafin-zero',
+  'Paldean Tauros Blaze': 'tauros-paldea-blaze-breed',
+  'Squawkabilly': 'squawkabilly-green-plumage',
+  'Tatsugiri': 'tatsugiri-curly',
+  'Toxtricity': 'toxtricity-amped',
+};
+
+// In-session cache
+const POKEAPI_CACHE = {};
+
+function monToSlug(name) {
+  if (POKEAPI_SLUG_MAP[name]) return POKEAPI_SLUG_MAP[name];
+  return name.toLowerCase().replace(/\s+/g,'-').replace(/['.]/g,'');
+}
+
+async function fetchPokeData(monName) {
+  const slug = monToSlug(monName);
+  if (POKEAPI_CACHE[slug]) return POKEAPI_CACHE[slug];
+  try {
+    const [pokeRes, specRes] = await Promise.all([
+      fetch(`${POKEAPI_BASE}/pokemon/${slug}`),
+      fetch(`${POKEAPI_BASE}/pokemon-species/${slug.replace(/-[a-z]+$/, '').replace(/-\d+$/, '') || slug}`)
+        .catch(() => null)
+    ]);
+    if (!pokeRes.ok) throw new Error(`${pokeRes.status} for ${slug}`);
+    const poke = await pokeRes.json();
+    const spec = specRes && specRes.ok ? await specRes.json() : null;
+
+    // Parse what we need
+    const data = {
+      name: monName,
+      slug,
+      id: poke.id,
+      types: poke.types.map(t => t.type.name),
+      stats: Object.fromEntries(poke.stats.map(s => [s.stat.name, s.base_stat])),
+      abilities: poke.abilities.map(a => ({
+        name: a.ability.name,
+        url: a.ability.url,
+        isHidden: a.is_hidden,
+        displayName: a.ability.name.replace(/-/g,' ').replace(/\b\w/g,c=>c.toUpperCase()),
+        description: null, // fetched lazily
+      })),
+      // S/V learnset: filter moves learned in scarlet-violet
+      moves: poke.moves
+        .filter(m => m.version_group_details.some(v =>
+          v.version_group.name === 'scarlet-violet' &&
+          (v.move_learn_method.name === 'level-up' || v.move_learn_method.name === 'machine')
+        ))
+        .map(m => ({
+          name: m.move.name,
+          url: m.move.url,
+          displayName: m.move.name.replace(/-/g,' ').replace(/\b\w/g,c=>c.toUpperCase()),
+          learnMethod: m.version_group_details.find(v=>v.version_group.name==='scarlet-violet')?.move_learn_method.name,
+          levelLearnedAt: m.version_group_details.find(v=>v.version_group.name==='scarlet-violet' && v.move_learn_method.name==='level-up')?.level_learned_at || null,
+          detail: null, // fetched lazily
+        }))
+        .sort((a,b) => {
+          if (a.learnMethod === 'level-up' && b.learnMethod !== 'level-up') return -1;
+          if (b.learnMethod === 'level-up' && a.learnMethod !== 'level-up') return 1;
+          return (a.levelLearnedAt||999) - (b.levelLearnedAt||999) || a.displayName.localeCompare(b.displayName);
+        }),
+    };
+    POKEAPI_CACHE[slug] = data;
+    return data;
+  } catch(e) {
+    POKEAPI_CACHE[slug] = {error: e.message, slug};
+    return POKEAPI_CACHE[slug];
+  }
+}
+
+async function fetchMoveDetail(moveUrl) {
+  try {
+    const res = await fetch(moveUrl);
+    if (!res.ok) return null;
+    const m = await res.json();
+    const effectEntry = m.effect_entries?.find(e=>e.language.name==='en');
+    return {
+      type: m.type?.name || '?',
+      category: m.damage_class?.name || '?',
+      power: m.power,
+      accuracy: m.accuracy,
+      pp: m.pp,
+      effect: effectEntry?.short_effect || '',
+    };
+  } catch { return null; }
+}
+
+async function fetchAbilityDetail(abilityUrl) {
+  try {
+    const res = await fetch(abilityUrl);
+    if (!res.ok) return null;
+    const a = await res.json();
+    const entry = a.effect_entries?.find(e=>e.language.name==='en');
+    return entry?.short_effect || entry?.effect || '';
+  } catch { return null; }
+}
+
+function typeBadge(type) {
+  const color = TYPE_COLORS[type] || '#888';
+  const d = el('div', {
+    style: {
+      display:'inline-block', padding:'3px 10px', borderRadius:'999px',
+      background:color+'33', border:'0.5px solid '+color+'88',
+      fontSize:'11px', fontWeight:'700', textTransform:'capitalize',
+      letterSpacing:'0.4px', color: color
+    }
+  }, type);
+  return d;
+}
+
+function statBar(label, value, max, color) {
+  const pct = Math.min(100, Math.round(value/max*100));
+  const tip = `${label}: ${value} base points`;
+  const container = el('div', { style:{ display:'grid', gridTemplateColumns:'80px 36px 1fr', alignItems:'center', gap:'8px', marginBottom:'6px' } }, [
+    withTooltip(el('span', { style:{ fontSize:'11px', color:'var(--color-text-tertiary)', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.5px' } }, label), tip),
+    el('span', { style:{ fontFamily:'var(--font-display)', fontWeight:'700', fontSize:'14px', textAlign:'right' } }, String(value)),
+    el('div', { style:{ height:'8px', background:'var(--color-background-tertiary)', borderRadius:'4px', overflow:'hidden' } }, [
+      el('div', { style:{ height:'100%', width:pct+'%', background:color, borderRadius:'4px', transition:'width 0.4s ease' } })
+    ])
+  ]);
+  return container;
+}
+
+// ── Pokédex view renderer ────────────────────────────────────────────────────
+function renderPokedexView(state, coach, mon, container) {
+  container.innerHTML = '';
+
+  const loading = el('div', { style:{ padding:'40px 24px', textAlign:'center', color:'var(--color-text-tertiary)' } }, [
+    el('div', { style:{ fontSize:'24px', marginBottom:'12px' } }, '⏳'),
+    el('div', { style:{ fontSize:'13px' } }, 'Loading Pokédex data...')
+  ]);
+  container.appendChild(loading);
+
+  fetchPokeData(mon).then(data => {
+    container.innerHTML = '';
+
+    if (data.error) {
+      container.appendChild(el('div', { style:{ padding:'32px 24px', textAlign:'center', color:'var(--color-text-tertiary)' } }, [
+        el('div', { style:{ fontSize:'32px', marginBottom:'12px' } }, '❓'),
+        el('div', { style:{ fontWeight:'600', marginBottom:'6px' } }, 'Data unavailable'),
+        el('div', { style:{ fontSize:'12px' } }, `Could not find "${mon}" (tried slug: ${data.slug})`),
+      ]));
+      return;
+    }
+
+    const coachColor = COACH_COLORS[coach] || '#888';
+
+    // Types
+    const typesRow = el('div', { style:{ display:'flex', gap:'8px', flexWrap:'wrap', marginBottom:'16px' } },
+      data.types.map(t => typeBadge(t))
+    );
+
+    // Base stats
+    const STAT_LABELS = { hp:'HP', attack:'Atk', defense:'Def', 'special-attack':'SpA', 'special-defense':'SpD', speed:'Spe' };
+    const STAT_COLORS = { hp:'#f87171', attack:'#fb923c', defense:'#facc15', 'special-attack':'#60a5fa', 'special-defense':'#34d399', speed:'#a78bfa' };
+    const totalBST = Object.values(data.stats).reduce((s,v)=>s+v,0);
+    const statsSection = el('div', { style:{ background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-lg)', padding:'16px 20px 12px', marginBottom:'12px' } }, [
+      el('div', { style:{ fontSize:'11px', fontWeight:'700', textTransform:'uppercase', letterSpacing:'0.7px', color:'var(--color-text-tertiary)', marginBottom:'12px' } }, 'Base stats'),
+      ...Object.entries(STAT_LABELS).map(([key, label]) =>
+        statBar(label, data.stats[key]||0, 255, STAT_COLORS[key])
+      ),
+      el('div', { style:{ display:'flex', justifyContent:'space-between', marginTop:'10px', paddingTop:'8px', borderTop:'0.5px solid var(--color-border-tertiary)' } }, [
+        withTooltip(el('span', { style:{ fontSize:'11px', color:'var(--color-text-tertiary)', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.5px' } }, 'BST'), 'Base Stat Total: sum of all base stats'),
+        el('span', { style:{ fontFamily:'var(--font-display)', fontWeight:'700', fontSize:'15px' } }, String(totalBST))
+      ])
+    ]);
+
+    // Abilities
+    const abilitiesSection = el('div', { style:{ background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-lg)', padding:'16px 20px', marginBottom:'12px' } }, [
+      el('div', { style:{ fontSize:'11px', fontWeight:'700', textTransform:'uppercase', letterSpacing:'0.7px', color:'var(--color-text-tertiary)', marginBottom:'10px' } }, 'Abilities'),
+      ...data.abilities.map(a => {
+        const badge = a.isHidden
+          ? el('span', { style:{ fontSize:'9px', fontWeight:'600', color:'var(--color-text-tertiary)', background:'var(--color-background-tertiary)', padding:'2px 6px', borderRadius:'999px', marginLeft:'6px', textTransform:'uppercase', letterSpacing:'0.4px' } }, 'Hidden')
+          : null;
+        const row = el('div', { style:{ display:'flex', alignItems:'center', gap:'8px', padding:'6px 0', borderBottom:'0.5px solid var(--color-border-tertiary)' } }, [
+          el('span', { style:{ fontWeight:'600', fontSize:'13px' } }, a.displayName),
+          badge,
+          el('span', { style:{ marginLeft:'auto', fontSize:'11px', color:'var(--color-text-tertiary)' } }, '— hover for description')
+        ].filter(x=>x));
+        // Fetch ability description lazily for tooltip
+        withTooltip(row, 'Loading...');
+        fetchAbilityDetail(a.url).then(desc => {
+          if (desc) {
+            row.removeEventListener('mouseenter', row._tipFn);
+            withTooltip(row, desc);
+          }
+        });
+        return row;
+      })
+    ]);
+
+    // Learnset — all S/V moves combined, alphabetical
+    const allMovesSorted = [...data.moves].sort((a,b) => a.displayName.localeCompare(b.displayName));
+
+    function moveRow(m) {
+      const row = el('div', { style:{ display:'flex', alignItems:'center', gap:'10px', padding:'5px 0', borderBottom:'0.5px solid var(--color-border-tertiary)', fontSize:'13px' } }, [
+        el('span', { style:{ fontWeight:'500' } }, m.displayName),
+        el('span', { style:{ marginLeft:'auto', fontSize:'11px', color:'var(--color-text-tertiary)', fontStyle:'italic' } }, 'hover for details')
+      ]);
+      withTooltip(row, 'Loading...');
+      fetchMoveDetail(m.url).then(d => {
+        if (d) {
+          const cat = d.category === 'physical' ? '⚔️' : d.category === 'special' ? '✨' : '💫';
+          const tip = `${d.type.toUpperCase()} ${cat}  |  Power: ${d.power||'—'}  |  Acc: ${d.accuracy||'—'}%  |  PP: ${d.pp}\n${d.effect}`;
+          withTooltip(row, tip);
+          const badge = typeBadge(d.type);
+          badge.style.marginLeft = 'auto';
+          badge.style.fontSize = '10px';
+          badge.style.padding = '2px 7px';
+          row.querySelector('span:last-child').replaceWith(badge);
+        }
+      });
+      return row;
+    }
+
+    const learnsetSection = el('div', { style:{ background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-lg)', padding:'16px 20px', marginBottom:'12px' } }, [
+      el('div', { style:{ fontSize:'11px', fontWeight:'700', textTransform:'uppercase', letterSpacing:'0.7px', color:'var(--color-text-tertiary)', marginBottom:'12px' } }, `Scarlet & Violet learnset — ${allMovesSorted.length} moves`),
+      ...allMovesSorted.map(moveRow)
+    ]);
+
+    container.appendChild(el('div', { style:{ padding:'4px 0' } }, [
+      typesRow,
+      statsSection,
+      abilitiesSection,
+      learnsetSection,
+      el('div', { style:{ fontSize:'10px', color:'var(--color-text-tertiary)', textAlign:'right', marginTop:'4px' } }, `Data via PokéAPI  •  #${data.id}`)
+    ]));
+  });
+}
+
+// ── Move tooltip for existing views (H2H, deep dive moves table) ─────────────
+const MOVE_DETAIL_CACHE = {};
+async function fetchMoveByName(moveName) {
+  const slug = moveName.toLowerCase().replace(/\s+/g,'-').replace(/['.]/g,'');
+  if (MOVE_DETAIL_CACHE[slug]) return MOVE_DETAIL_CACHE[slug];
+  try {
+    const res = await fetch(`${POKEAPI_BASE}/move/${slug}`);
+    if (!res.ok) throw new Error(res.status);
+    const m = await res.json();
+    const effectEntry = m.effect_entries?.find(e=>e.language.name==='en');
+    const d = {
+      type: m.type?.name || '?',
+      category: m.damage_class?.name || '?',
+      power: m.power,
+      accuracy: m.accuracy,
+      pp: m.pp,
+      effect: effectEntry?.short_effect || '',
+    };
+    MOVE_DETAIL_CACHE[slug] = d;
+    return d;
+  } catch { MOVE_DETAIL_CACHE[slug] = null; return null; }
+}
+
+function moveTip(moveName) {
+  const span = el('span', { style:{ borderBottom:'1px dashed var(--color-text-tertiary)', cursor:'help' } }, moveName);
+  fetchMoveByName(moveName).then(d => {
+    if (d) {
+      const typeColor = TYPE_COLORS[d.type] || '#888';
+      const cat = d.category === 'physical' ? '⚔️ Physical' : d.category === 'special' ? '✨ Special' : '💫 Status';
+      const tipText = `${d.type.toUpperCase()} · ${cat}\nPower: ${d.power||'—'}  Acc: ${d.accuracy||'—'}%  PP: ${d.pp}\n${d.effect}`;
+      withTooltip(span, tipText);
+    }
+  });
+  return span;
 }
 // ── Standings + Power Rankings + Weekly Recap ─────────────────────────────────
 
@@ -1350,249 +1663,281 @@ function renderWeeklyRecap(state) {
 function viewLeaderboard(state) {
   const { data } = state;
   const { lb } = state;
+
+  // Sort key and direction
+  const sortKey = lb.sortKey || 'mvp';
+  const sortDir = lb.sortDir || 'desc';
+  const minGP = parseInt(lb.minGP) || 1;
+
   const mons = monStats(data.gameLog);
-
   const filtered = Object.values(mons)
-    .filter(m => lb.filterCoach==='All' || m.coach===lb.filterCoach)
-    .filter(m => m.gp >= (lb.minGP||1))
-    .sort((a,b) => {
-      const av = a[lb.sortKey]??0, bv = b[lb.sortKey]??0;
-      return lb.sortDir==='desc' ? bv-av : av-bv;
-    }).slice(0,60);
+    .filter(m => lb.filterCoach === 'All' || m.coach === lb.filterCoach)
+    .filter(m => m.gp >= minGP)
+    .sort((a, b) => {
+      const av = a[sortKey] ?? 0, bv = b[sortKey] ?? 0;
+      return sortDir === 'desc' ? bv - av : av - bv;
+    })
+    .slice(0, 80);
 
-  const controls = el('div',{
-    style:{display:'flex',gap:'12px',marginBottom:'1.25rem',flexWrap:'wrap',alignItems:'center'}
-  },[
-    el('label',{style:{fontSize:'12px',color:'var(--color-text-secondary)',textTransform:'uppercase',letterSpacing:'0.6px',fontWeight:'600'}},'Coach'),
-    select(lb.filterCoach, ['All'].concat(COACHES), v=>{state.lb.filterCoach=v;render(state);}),
-    el('label',{style:{fontSize:'12px',color:'var(--color-text-secondary)',textTransform:'uppercase',letterSpacing:'0.6px',fontWeight:'600'}},'Min GP'),
-    el('input',{
-      type:'number',value:String(lb.minGP||1),min:'1',max:'20',
-      style:{width:'60px',padding:'6px 8px',borderRadius:'var(--border-radius-md)',border:'0.5px solid var(--color-border-secondary)',background:'var(--color-background-secondary)',color:'var(--color-text-primary)',fontSize:'13px'},
-      oninput:(e)=>{state.lb.minGP=Math.max(1,parseInt(e.target.value)||1);render(state);}
+  const controls = el('div', {
+    style: { display:'flex', gap:'12px', marginBottom:'1.25rem', flexWrap:'wrap', alignItems:'center' }
+  }, [
+    el('label', { style:{ fontSize:'12px', color:'var(--color-text-secondary)', textTransform:'uppercase', letterSpacing:'0.6px', fontWeight:'600' } }, 'Coach'),
+    select(lb.filterCoach || 'All', ['All'].concat(COACHES), v => { state.lb.filterCoach = v; render(state); }),
+    el('label', { style:{ fontSize:'12px', color:'var(--color-text-secondary)', textTransform:'uppercase', letterSpacing:'0.6px', fontWeight:'600' } }, 'Min GP'),
+    el('input', {
+      type:'number', value:String(minGP), min:'1', max:'20',
+      style:{ width:'60px', padding:'6px 8px', borderRadius:'var(--border-radius-md)', border:'0.5px solid var(--color-border-secondary)', background:'var(--color-background-secondary)', color:'var(--color-text-primary)', fontSize:'13px' },
+      oninput: (e) => { state.lb.minGP = Math.max(1, parseInt(e.target.value) || 1); render(state); }
     })
   ]);
 
-  const headers = [
-    {key:'rank',label:'#'},{key:'mvp',label:'MVP'},
-    {key:'mon',label:'Pokemon',align:'left'},{key:'coach',label:'Coach',align:'left'},
-    {key:'gp',label:'GP'},{key:'record',label:'W-L'},
-    {key:'winPct',label:'Win%'},{key:'tk',label:'K'},
-    {key:'deaths',label:'D'},{key:'kdr',label:'K/D'},{key:'dout',label:'Dmg'}
-  ];
+  // Sortable column header
+  const colHeader = (key, label, align, tipText) => {
+    const active = sortKey === key;
+    const arrow = active ? (sortDir === 'desc' ? ' ▼' : ' ▲') : '';
+    const th = el('th', {
+      onclick: () => {
+        if (state.lb.sortKey === key) {
+          state.lb.sortDir = state.lb.sortDir === 'desc' ? 'asc' : 'desc';
+        } else {
+          state.lb.sortKey = key;
+          state.lb.sortDir = 'desc';
+        }
+        render(state);
+      },
+      style: {
+        padding:'10px 12px', fontSize:'11px', fontWeight:'600',
+        color: active ? 'var(--color-text-primary)' : 'var(--color-text-tertiary)',
+        textTransform:'uppercase', letterSpacing:'0.6px',
+        textAlign: align || 'right',
+        cursor:'pointer', userSelect:'none', whiteSpace:'nowrap',
+        background: active ? 'var(--color-background-secondary)' : 'var(--color-background-primary)',
+        transition:'background 0.1s',
+        borderBottom: active ? '2px solid var(--color-text-primary)' : '0.5px solid var(--color-border-tertiary)',
+      }
+    }, label + arrow);
+    if (tipText) withTooltip(th, tipText);
+    th.onmouseover = () => { if (!active) th.style.color = 'var(--color-text-secondary)'; };
+    th.onmouseout  = () => { if (!active) th.style.color = 'var(--color-text-tertiary)'; };
+    return th;
+  };
 
-  const rows = filtered.map((r,i) => [
-    rankBadge(i+1),
-    el('span',{style:{fontFamily:'var(--font-display)',fontWeight:'600',fontSize:'15px'}},String(r.mvp)),
-    monLink(r.coach,r.mon),
+  const rows = filtered.map((r, i) => [
+    rankBadge(i + 1),
+    el('span', { style:{ fontFamily:'var(--font-display)', fontWeight:'600', fontSize:'15px' } }, String(r.mvp)),
+    monLink(r.coach, r.mon),
     coachBadge(r.coach),
     formatInt(r.gp),
-    mono(r.gw+'-'+(r.gp-r.gw)),
+    mono(r.gw + '-' + (r.gp - r.gw)),
     formatPct(r.winPct),
     formatInt(r.tk),
     formatInt(r.deaths),
     formatKDR(r.kdr),
-    formatDmg(r.dout)
+    formatDmg(r.dout),
+    formatInt(r.dmgPerGame) + '%',
+    r.dmgPerTurn > 0 ? r.dmgPerTurn.toFixed(1) + '%' : '—',
   ]);
 
-  return el('div',{},[controls, section('Pokemon Leaderboard','Season MVP rankings',el('div',{style:{overflowX:'auto'}},makeTable(headers,rows,{stickyHeader:true})))]);
-}
+  // Custom table with sortable headers
+  const thead = el('thead', {}, [
+    el('tr', { style:{ background:'var(--color-background-primary)', position:'sticky', top:'0', zIndex:'2' } }, [
+      colHeader('rank',       '#',          'left'),
+      colHeader('mvp',        'MVP',        'right', TOOLTIPS['MVP']),
+      colHeader('mon',        'Pokémon',    'left'),
+      colHeader('coach',      'Coach',      'left'),
+      colHeader('gp',         'GP',         'right', TOOLTIPS['GP']),
+      colHeader('record',     'W-L',        'right', TOOLTIPS['W-L']),
+      colHeader('winPct',     'Win%',       'right', TOOLTIPS['Win%']),
+      colHeader('tk',         'K',          'right', TOOLTIPS['K']),
+      colHeader('deaths',     'D',          'right', TOOLTIPS['D']),
+      colHeader('kdr',        'K/D',        'right', TOOLTIPS['K/D']),
+      colHeader('dout',       'Dmg',        'right', TOOLTIPS['Dmg']),
+      colHeader('dmgPerGame', 'Dmg/G',      'right', TOOLTIPS['Dmg/G']),
+      colHeader('dmgPerTurn', 'Dmg/T',      'right', TOOLTIPS['Dmg/T']),
+    ])
+  ]);
+
+  const tbody = el('tbody', {}, rows.map(row => {
+    return el('tr', { style:{ borderBottom:'0.5px solid var(--color-border-tertiary)', transition:'background 0.1s' } },
+      row.map((cell, ci) => {
+        const align = [0,2,3].includes(ci) ? 'left' : 'right';
+        const td = el('td', { style:{ padding:'10px 12px', textAlign:align, fontSize:'13px' } });
+        if (typeof cell === 'string' || typeof cell === 'number') td.textContent = String(cell);
+        else if (cell) td.appendChild(cell);
+        return td;
+      })
+    );
+  }));
+
+  const table = el('div', { style:{ overflowX:'auto' } }, [
+    el('table', { style:{ width:'100%', borderCollapse:'collapse', fontSize:'13px' } }, [thead, tbody])
+  ]);
+
+  return el('div', {}, [
+    controls,
+    section('Pokémon Leaderboard', filtered.length + ' entries — click any column to sort',
+      table
+    )
+  ]);
+}// ── Head-to-head ──────────────────────────────────────────────────────────────
 function viewHeadToHead(state) {
-  const { c1, c2 } = state.h2h;
   const { data } = state;
+  const c1 = state.h2h.c1, c2 = state.h2h.c2;
 
   const controls = el('div', {
-    style: { display: 'flex', gap: '12px', marginBottom: '1.25rem', flexWrap: 'wrap', alignItems: 'center' }
+    style: { display: 'flex', gap: '12px', marginBottom: '1.5rem', flexWrap: 'wrap', alignItems: 'center' }
   }, [
-    el('label', { style: { fontSize: '12px', color: 'var(--color-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.6px', fontWeight: '600' } }, 'Coach A'),
+    el('label', { style: { fontSize: '12px', color: 'var(--color-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.6px', fontWeight: '600' } }, 'Coach 1'),
     select(c1, COACHES, v => { state.h2h.c1 = v; render(state); }),
-    el('label', { style: { fontSize: '12px', color: 'var(--color-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.6px', fontWeight: '600' } }, 'Coach B'),
-    select(c2, COACHES, v => { state.h2h.c2 = v; render(state); })
+    el('label', { style: { fontSize: '12px', color: 'var(--color-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.6px', fontWeight: '600' } }, 'Coach 2'),
+    select(c2, COACHES.filter(c => c !== c1), v => { state.h2h.c2 = v; render(state); }),
   ]);
 
   if (c1 === c2) return el('div', {}, [controls, card(el('p', { style: { margin: '0', color: 'var(--color-text-secondary)' } }, 'Select two different coaches.'))]);
 
+  const gl = data.gameLog;
   const gids = new Set();
-  data.gameLog.forEach(r => { if (r.coach === c1 && r.opp === c2) gids.add(r.gid); });
+  gl.forEach(r => { if (r.coach === c1 && r.opp === c2) gids.add(r.gid); });
   const games = Array.from(gids).sort();
 
-  if (games.length === 0) {
-    return el('div', {}, [controls, card(el('p', { style: { margin: '0', color: 'var(--color-text-secondary)' } }, 'No games between ' + c1 + ' and ' + c2 + ' yet.'))]);
-  }
+  if (!games.length) return el('div', {}, [controls, card(el('p', { style: { margin: '0', color: 'var(--color-text-secondary)' } }, 'These coaches have not played yet.'))]);
 
-  const h2hGl = data.gameLog.filter(r => gids.has(r.gid));
+  const h2hGl = gl.filter(r => gids.has(r.gid));
   const h2hMl = data.moveLog.filter(r => gids.has(r.gid));
   const h2hTl = data.turnLog.filter(r => gids.has(r.gid));
+
+  const c1Rows = h2hGl.filter(r => r.coach === c1);
+  const c2Rows = h2hGl.filter(r => r.coach === c2);
+
+  // Game-level wins
+  const gameWinners = {};
+  h2hGl.forEach(r => { if (r.won && !gameWinners[r.gid]) gameWinners[r.gid] = r.coach; });
+  const c1Wins = games.filter(g => gameWinners[g] === c1).length;
+  const c2Wins = games.filter(g => gameWinners[g] === c2).length;
+
+  // Overall stats
+  const c1Kills = c1Rows.reduce((s, r) => s + (r.kd||0) + (r.ki||0), 0);
+  const c2Kills = c2Rows.reduce((s, r) => s + (r.kd||0) + (r.ki||0), 0);
+  const c1Dmg   = c1Rows.reduce((s, r) => s + (r.dout||0), 0);
+  const c2Dmg   = c2Rows.reduce((s, r) => s + (r.dout||0), 0);
 
   const c1Color = COACH_COLORS[c1] || '#888';
   const c2Color = COACH_COLORS[c2] || '#888';
 
-  // Series score
-  const gameWinners = {};
-  h2hGl.forEach(r => { if (r.won && !gameWinners[r.gid]) gameWinners[r.gid] = r.coach; });
-  const c1Wins = Object.values(gameWinners).filter(w => w === c1).length;
-  const c2Wins = Object.values(gameWinners).filter(w => w === c2).length;
-  const seriesWinner = c1Wins > c2Wins ? c1 : c2Wins > c1Wins ? c2 : null;
-
-  // Totals
-  const c1Rows = h2hGl.filter(r => r.coach === c1);
-  const c2Rows = h2hGl.filter(r => r.coach === c2);
-  const c1Kills = c1Rows.reduce((s, r) => s + (r.kd || 0) + (r.ki || 0), 0);
-  const c2Kills = c2Rows.reduce((s, r) => s + (r.kd || 0) + (r.ki || 0), 0);
-  const c1Dmg = c1Rows.reduce((s, r) => s + (r.dout || 0), 0);
-  const c2Dmg = c2Rows.reduce((s, r) => s + (r.dout || 0), 0);
-
-  // Scoreboard hero
+  // ── Scoreboard hero ──────────────────────────────────────────────────────
   const scoreboard = el('div', {
     style: {
-      background: 'linear-gradient(135deg, ' + c1Color + '20 0%, var(--color-background-primary) 40%, var(--color-background-primary) 60%, ' + c2Color + '20 100%)',
+      background: `linear-gradient(135deg, ${c1Color}15 0%, var(--color-background-primary) 50%, ${c2Color}15 100%)`,
       border: '0.5px solid var(--color-border-tertiary)',
       borderRadius: 'var(--border-radius-lg)',
-      padding: '2rem',
-      marginBottom: '1.25rem'
+      padding: '2rem', marginBottom: '1.25rem'
     }
   }, [
     el('div', {
-      style: { display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center', gap: '20px' }
+      style: { display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center', gap: '24px' }
     }, [
+      // C1 side
       el('div', { style: { textAlign: 'center' } }, [
         el('div', { style: { marginBottom: '12px', display: 'flex', justifyContent: 'center' } }, coachBadge(c1, 'lg')),
         el('div', {
-          style: {
-            fontFamily: 'var(--font-display)', fontSize: '64px', fontWeight: '700',
-            color: c1Wins >= c2Wins ? c1Color : 'var(--color-text-tertiary)',
-            lineHeight: '1', letterSpacing: '-0.03em'
-          }
-        }, String(c1Wins))
+          style: { fontFamily: 'var(--font-display)', fontSize: '72px', fontWeight: '700', color: c1Wins > c2Wins ? c1Color : 'var(--color-text-primary)', lineHeight: '1', letterSpacing: '-0.04em' }
+        }, String(c1Wins)),
       ]),
+      // Center divider
       el('div', { style: { textAlign: 'center' } }, [
-        el('div', { style: { fontSize: '28px', color: 'var(--color-text-tertiary)', fontWeight: '300' } }, '—'),
-        el('div', {
-          style: {
-            fontSize: '11px', color: 'var(--color-text-tertiary)', marginTop: '8px',
-            textTransform: 'uppercase', letterSpacing: '0.8px', fontWeight: '600'
-          }
-        }, games.length + (games.length === 1 ? ' game' : ' games'))
+        el('div', { style: { fontSize: '32px', color: 'var(--color-text-tertiary)', fontWeight: '300', lineHeight: '1' } }, '—'),
+        el('div', { style: { fontSize: '11px', color: 'var(--color-text-tertiary)', marginTop: '10px', textTransform: 'uppercase', letterSpacing: '0.8px', fontWeight: '600' } }, games.length + ' games'),
       ]),
+      // C2 side
       el('div', { style: { textAlign: 'center' } }, [
         el('div', { style: { marginBottom: '12px', display: 'flex', justifyContent: 'center' } }, coachBadge(c2, 'lg')),
         el('div', {
-          style: {
-            fontFamily: 'var(--font-display)', fontSize: '64px', fontWeight: '700',
-            color: c2Wins >= c1Wins ? c2Color : 'var(--color-text-tertiary)',
-            lineHeight: '1', letterSpacing: '-0.03em'
-          }
-        }, String(c2Wins))
-      ])
+          style: { fontFamily: 'var(--font-display)', fontSize: '72px', fontWeight: '700', color: c2Wins > c1Wins ? c2Color : 'var(--color-text-primary)', lineHeight: '1', letterSpacing: '-0.04em' }
+        }, String(c2Wins)),
+      ]),
     ]),
+    // Team stats row
     el('div', {
-      style: {
-        display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr',
-        gap: '12px', marginTop: '24px'
-      }
+      style: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '0', marginTop: '24px', borderTop: '0.5px solid var(--color-border-tertiary)', paddingTop: '20px' }
     }, [
-      el('div', { style: { textAlign: 'center' } }, [
-        el('div', { style: { fontSize: '10px', color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.6px', fontWeight: '600', marginBottom: '4px' } }, c1 + ' kills'),
-        el('div', { style: { fontFamily: 'var(--font-display)', fontSize: '20px', fontWeight: '600', color: c1Color } }, String(c1Kills))
+      el('div', { style: { textAlign: 'center', borderRight: '0.5px solid var(--color-border-tertiary)', padding: '0 16px' } }, [
+        el('div', { style: { fontSize: '10px', color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.6px', fontWeight: '600', marginBottom: '6px' } }, c1 + ' kills'),
+        el('div', { style: { fontFamily: 'var(--font-display)', fontSize: '24px', fontWeight: '700', color: c1Color } }, String(c1Kills)),
       ]),
-      el('div', { style: { textAlign: 'center' } }, [
-        el('div', { style: { fontSize: '10px', color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.6px', fontWeight: '600', marginBottom: '4px' } }, c1 + ' damage'),
-        el('div', { style: { fontFamily: 'var(--font-display)', fontSize: '20px', fontWeight: '600', color: c1Color } }, formatInt(c1Dmg) + '%')
+      el('div', { style: { textAlign: 'center', borderRight: '0.5px solid var(--color-border-tertiary)', padding: '0 16px' } }, [
+        el('div', { style: { fontSize: '10px', color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.6px', fontWeight: '600', marginBottom: '6px' } }, c1 + ' damage'),
+        el('div', { style: { fontFamily: 'var(--font-display)', fontSize: '24px', fontWeight: '700', color: c1Color } }, formatInt(c1Dmg) + '%'),
       ]),
-      el('div', { style: { textAlign: 'center' } }, [
-        el('div', { style: { fontSize: '10px', color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.6px', fontWeight: '600', marginBottom: '4px' } }, c2 + ' kills'),
-        el('div', { style: { fontFamily: 'var(--font-display)', fontSize: '20px', fontWeight: '600', color: c2Color } }, String(c2Kills))
+      el('div', { style: { textAlign: 'center', borderRight: '0.5px solid var(--color-border-tertiary)', padding: '0 16px' } }, [
+        el('div', { style: { fontSize: '10px', color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.6px', fontWeight: '600', marginBottom: '6px' } }, c2 + ' kills'),
+        el('div', { style: { fontFamily: 'var(--font-display)', fontSize: '24px', fontWeight: '700', color: c2Color } }, String(c2Kills)),
       ]),
-      el('div', { style: { textAlign: 'center' } }, [
-        el('div', { style: { fontSize: '10px', color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.6px', fontWeight: '600', marginBottom: '4px' } }, c2 + ' damage'),
-        el('div', { style: { fontFamily: 'var(--font-display)', fontSize: '20px', fontWeight: '600', color: c2Color } }, formatInt(c2Dmg) + '%')
-      ])
+      el('div', { style: { textAlign: 'center', padding: '0 16px' } }, [
+        el('div', { style: { fontSize: '10px', color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.6px', fontWeight: '600', marginBottom: '6px' } }, c2 + ' damage'),
+        el('div', { style: { fontFamily: 'var(--font-display)', fontSize: '24px', fontWeight: '700', color: c2Color } }, formatInt(c2Dmg) + '%'),
+      ]),
     ])
   ]);
 
-  // Highlights
-  const monStats = {};
+  // ── Highlights ───────────────────────────────────────────────────────────
+  const monAgg = {};
   h2hGl.forEach(r => {
     const k = r.coach + '|' + r.mon;
-    if (!monStats[k]) monStats[k] = { coach: r.coach, mon: r.mon, tk: 0, d: 0, dout: 0, gp: 0 };
-    monStats[k].tk += (r.kd || 0) + (r.ki || 0);
-    monStats[k].d += r.d || 0;
-    monStats[k].dout += r.dout || 0;
-    monStats[k].gp++;
+    if (!monAgg[k]) monAgg[k] = { coach: r.coach, mon: r.mon, tk: 0, d: 0, dout: 0, gp: 0 };
+    monAgg[k].tk += (r.kd||0) + (r.ki||0);
+    monAgg[k].d  += r.d||0;
+    monAgg[k].dout += r.dout||0;
+    monAgg[k].gp++;
   });
 
-  const moveUses = {};
+  const moveAgg = {};
   h2hMl.forEach(r => {
     const k = r.coach + '|' + r.mon + '|' + r.move;
-    if (!moveUses[k]) moveUses[k] = { coach: r.coach, mon: r.mon, move: r.move, uses: 0, dmg: 0 };
-    moveUses[k].uses += r.uses || 0;
-    moveUses[k].dmg += r.dmg || 0;
+    if (!moveAgg[k]) moveAgg[k] = { coach: r.coach, mon: r.mon, move: r.move, uses: 0, dmg: 0 };
+    moveAgg[k].uses += r.uses||0;
+    moveAgg[k].dmg  += r.dmg||0;
   });
 
-  const tlCounts = {};
-  h2hTl.forEach(r => {
-    if (!r.coach || !r.mon) return;
-    const k = r.coach + '|' + r.mon + '|' + r.event;
-    tlCounts[k] = (tlCounts[k] || 0) + 1;
-  });
-
-  const monArr = Object.values(monStats);
-  const moveArr = Object.values(moveUses);
-
-  const topKiller = monArr.sort((a, b) => b.tk - a.tk)[0];
-  const topDmg = monArr.sort((a, b) => b.dout - a.dout)[0];
-  const topMove = moveArr.sort((a, b) => b.uses - a.uses)[0];
-
-  // Wall: most protect blocks
   const protectBlocks = {};
   h2hTl.forEach(r => {
     if (r.event === 'PROTECT' && r.outcome === 'BLOCKED' && r.coach && r.mon) {
       const k = r.coach + '|' + r.mon;
-      protectBlocks[k] = (protectBlocks[k] || { coach: r.coach, mon: r.mon, count: 0 });
+      if (!protectBlocks[k]) protectBlocks[k] = { coach: r.coach, mon: r.mon, count: 0 };
       protectBlocks[k].count++;
     }
   });
-  const topWall = Object.values(protectBlocks).sort((a, b) => b.count - a.count)[0];
 
-  // Flinch machine
-  const flinches = {};
+  const flinchAgg = {};
   h2hTl.forEach(r => {
     if (r.event === 'FLINCH' && r.coach && r.mon) {
       const k = r.coach + '|' + r.mon;
-      flinches[k] = (flinches[k] || { coach: r.coach, mon: r.mon, count: 0 });
-      flinches[k].count++;
+      if (!flinchAgg[k]) flinchAgg[k] = { coach: r.coach, mon: r.mon, count: 0 };
+      flinchAgg[k].count++;
     }
   });
-  const topFlincher = Object.values(flinches).sort((a, b) => b.count - a.count)[0];
 
-  // Build highlight cards — pick the most interesting ones
+  const monArr  = Object.values(monAgg).sort((a,b) => b.tk - a.tk);
+  const moveArr = Object.values(moveAgg).sort((a,b) => b.uses - a.uses);
+  const topKiller   = monArr[0];
+  const topDmg      = Object.values(monAgg).sort((a,b) => b.dout - a.dout)[0];
+  const topMove     = moveArr[0];
+  const topWall     = Object.values(protectBlocks).sort((a,b) => b.count - a.count)[0];
+  const topFlincher = Object.values(flinchAgg).sort((a,b) => b.count - a.count)[0];
+
   const makeHighlight = (icon, label, coach, mon, valueLine, subLine) => {
     if (!mon) return null;
     const color = COACH_COLORS[coach] || '#888';
-    return el('div', {
+    const card = el('div', {
       onclick: () => { state.view = 'mon'; state.mdd.coach = coach; state.mdd.mon = mon; render(state); },
       style: {
-        background: 'var(--color-background-secondary)',
-        border: '0.5px solid var(--color-border-tertiary)',
-        borderRadius: 'var(--border-radius-lg)',
-        padding: '16px',
-        cursor: 'pointer',
-        transition: 'all 0.15s',
-        position: 'relative'
+        background: 'var(--color-background-secondary)', border: '0.5px solid var(--color-border-tertiary)',
+        borderRadius: 'var(--border-radius-lg)', padding: '16px', cursor: 'pointer',
+        transition: 'all 0.15s', position: 'relative'
       }
     }, [
-      el('div', {
-        style: {
-          position: 'absolute', top: '12px', right: '12px',
-          width: '28px', height: '28px', borderRadius: '50%',
-          background: color + '25', color: color,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: '15px'
-        }
-      }, icon),
-      el('div', {
-        style: { fontSize: '10px', color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.6px', fontWeight: '600', marginBottom: '10px', paddingRight: '32px' }
-      }, label),
+      el('div', { style: { position: 'absolute', top: '12px', right: '12px', width: '28px', height: '28px', borderRadius: '50%', background: color + '25', color: color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '15px' } }, icon),
+      el('div', { style: { fontSize: '10px', color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.6px', fontWeight: '600', marginBottom: '10px', paddingRight: '32px' } }, label),
       el('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' } }, [
         monSprite(mon, 40),
         el('div', {}, [
@@ -1600,11 +1945,12 @@ function viewHeadToHead(state) {
           el('div', { style: { display: 'flex', justifyContent: 'flex-start', marginTop: '4px' } }, coachBadge(coach))
         ])
       ]),
-      el('div', {
-        style: { fontFamily: 'var(--font-display)', fontSize: '20px', fontWeight: '700', color: color, marginTop: '8px', letterSpacing: '-0.02em' }
-      }, valueLine),
+      el('div', { style: { fontFamily: 'var(--font-display)', fontSize: '20px', fontWeight: '700', color, marginTop: '8px', letterSpacing: '-0.02em' } }, valueLine),
       subLine ? el('div', { style: { fontSize: '11px', color: 'var(--color-text-tertiary)', marginTop: '3px' } }, subLine) : null
     ].filter(x => x));
+    card.onmouseover = () => { card.style.transform = 'translateY(-2px)'; card.style.borderColor = color + '60'; };
+    card.onmouseout  = () => { card.style.transform = ''; card.style.borderColor = 'var(--color-border-tertiary)'; };
+    return card;
   };
 
   const highlights = [
@@ -1612,148 +1958,127 @@ function viewHeadToHead(state) {
       topKiller.tk + ' kill' + (topKiller.tk !== 1 ? 's' : ''),
       formatInt(topKiller.dout) + '% damage  •  ' + topKiller.gp + ' game' + (topKiller.gp !== 1 ? 's' : '')) : null,
     topMove ? makeHighlight('📋', 'Signature move', topMove.coach, topMove.mon,
-      topMove.move + ' ×' + topMove.uses,
-      formatInt(topMove.dmg) + '% total damage') : null,
+      topMove.move + ' ×' + topMove.uses, formatInt(topMove.dmg) + '% total damage') : null,
     topWall && topWall.count >= 2 ? makeHighlight('🛡️', 'The wall', topWall.coach, topWall.mon,
-      topWall.count + ' protect' + (topWall.count !== 1 ? 's' : '') + ' blocked',
-      'hardest to get through') : null,
+      topWall.count + ' protects blocked', 'hardest to get through') : null,
     topFlincher && topFlincher.count >= 1 ? makeHighlight('💥', 'Flinch machine', topFlincher.coach, topFlincher.mon,
-      topFlincher.count + ' flinch' + (topFlincher.count !== 1 ? 'es' : '') + ' caused',
-      'disruption specialist') : null,
-    topDmg && topDmg !== topKiller ? makeHighlight('💢', 'Damage dealer', topDmg.coach, topDmg.mon,
-      formatInt(topDmg.dout) + '% damage',
-      formatInt(topDmg.dout / Math.max(1, topDmg.gp)) + '% per game') : null
+      topFlincher.count + ' flinch' + (topFlincher.count !== 1 ? 'es' : '') + ' caused', 'disruption specialist') : null,
+    topDmg && topDmg.mon !== topKiller?.mon ? makeHighlight('💢', 'Damage dealer', topDmg.coach, topDmg.mon,
+      formatInt(topDmg.dout) + '% damage', formatInt(topDmg.dout / Math.max(1, topDmg.gp)) + '% per game') : null,
   ].filter(x => x).slice(0, 4);
 
-  const highlightsSection = section('Match highlights', 'Standout performers — click to open their deep dive',
-    el('div', {
-      style: {
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-        gap: '12px',
-        padding: '16px 20px 20px'
-      }
-    }, highlights.length > 0 ? highlights :
-      [el('div', { style: { padding: '20px', color: 'var(--color-text-tertiary)', textAlign: 'center' } }, 'Not enough data for highlights yet')]
-    ),
+  const highlightsSection = highlights.length > 0 ? section('Match highlights', 'Click any card to open deep dive',
+    el('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px', padding: '16px 20px 20px' } }, highlights),
     { marginBottom: '1.25rem' }
-  );
+  ) : null;
 
-  // Per-game team breakdowns
-  const gameCards = games.map((gid, gameIdx) => {
+  // ── Per-game breakdown — grouped by week ─────────────────────────────────
+  // Build team panel for a single game
+  const makeTeamPanel = (gid, coach) => {
     const gameRows = h2hGl.filter(r => r.gid === gid);
-    const winner = gameWinners[gid];
-    const g = gameIdx + 1;
+    const winner   = gameWinners[gid];
+    const coachRows = gameRows.filter(r => r.coach === coach);
+    const color = COACH_COLORS[coach] || '#888';
+    const isWinner = winner === coach;
 
-    const makeTeamPanel = (coach) => {
-      const coachRows = gameRows.filter(r => r.coach === coach);
-      const coachColor = COACH_COLORS[coach] || '#888';
-      const isWinner = winner === coach;
-
-      const monRows = coachRows.map(r => {
-        const moves = h2hMl
-          .filter(m => m.gid === gid && m.coach === coach && m.mon === r.mon)
-          .sort((a, b) => b.uses - a.uses)
-
-          .map(m => m.move + ' ×' + m.uses);
-
-        // Look up actual Tera type from turn log
-        const teraEvent = h2hTl.find(t => t.gid === gid && t.coach === coach && t.mon === r.mon && t.event === 'TERA');
-        const teraType = teraEvent ? teraEvent.outcome : null;
-
-        return el('div', {
-          style: {
-            display: 'flex',
-            alignItems: 'center',
-            gap: '10px',
-            padding: '8px 0',
-            borderBottom: '0.5px solid var(--color-border-tertiary)',
-            opacity: '1'
-          }
-        }, [
-          el('div', { style: { position: 'relative', flexShrink: '0' } }, [
-            monSprite(r.mon, 36),
-            r.lead ? el('span', {
-              style: {
-                position: 'absolute', top: '-4px', right: '-4px',
-                width: '14px', height: '14px', borderRadius: '50%',
-                background: coachColor, color: '#fff',
-                fontSize: '8px', fontWeight: '700',
-                display: 'flex', alignItems: 'center', justifyContent: 'center'
-              }
-            }, 'L') : null
-          ]),
-          el('div', { style: { flex: '1', minWidth: '0' } }, [
-            el('div', { style: { fontSize: '13px', fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, r.mon),
-            el('div', { style: { fontSize: '11px', color: 'var(--color-text-tertiary)', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } },
-              moves.length > 0 ? moves.join('  •  ') : 'no moves recorded')
-          ]),
-          el('div', { style: { textAlign: 'right', flexShrink: '0' } }, [
-            el('div', {
-              style: {
-                fontSize: '11px', fontWeight: '600',
-                display: 'flex', gap: '8px', justifyContent: 'flex-end'
-              }
-            }, [
-              (r.kd + r.ki) > 0 ? el('span', { style: { color: 'var(--color-text-success)' } }, (r.kd + r.ki) + 'K') : null,
-              r.d > 0 ? el('span', { style: { color: 'var(--color-text-danger)' } }, r.d + 'D') : null,
-              teraType ? typeBadge(teraType) : null
-            ].filter(x => x)),
-            el('div', { style: { fontSize: '11px', color: 'var(--color-text-tertiary)', marginTop: '2px' } },
-              formatInt(r.dout) + '% dmg')
-          ])
-        ]);
-      });
+    const monRows = coachRows.map(r => {
+      const movesForMon = h2hMl
+        .filter(m => m.gid === gid && m.coach === coach && m.mon === r.mon)
+        .sort((a, b) => b.uses - a.uses);
+      const teraEvent = h2hTl.find(t => t.gid === gid && t.coach === coach && t.mon === r.mon && t.event === 'TERA');
+      const teraType = teraEvent ? teraEvent.outcome : null;
 
       return el('div', {
-        style: {
-          flex: '1',
-          background: isWinner ? coachColor + '10' : 'var(--color-background-secondary)',
-          border: '0.5px solid ' + (isWinner ? coachColor + '50' : 'var(--color-border-tertiary)'),
-          borderRadius: 'var(--border-radius-lg)',
-          padding: '14px 16px',
-          minWidth: '0'
-        }
+        style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 0', borderBottom: '0.5px solid var(--color-border-tertiary)' }
       }, [
-        el('div', {
-          style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }
-        }, [
-          coachBadge(coach),
-          isWinner ? el('span', {
-            style: {
-              fontSize: '11px', fontWeight: '700', color: coachColor,
-              textTransform: 'uppercase', letterSpacing: '0.6px'
-            }
-          }, 'Winner') : null
-        ].filter(x => x)),
-        el('div', {}, monRows)
+        el('div', { style: { position: 'relative', flexShrink: '0' } }, [
+          monSprite(r.mon, 38),
+          r.lead ? el('span', {
+            style: { position: 'absolute', top: '-4px', right: '-4px', width: '14px', height: '14px', borderRadius: '50%', background: color, color: '#fff', fontSize: '8px', fontWeight: '700', display: 'flex', alignItems: 'center', justifyContent: 'center' }
+          }, 'L') : null
+        ]),
+        el('div', { style: { flex: '1', minWidth: '0' } }, [
+          el('div', { style: { fontSize: '13px', fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, r.mon),
+          el('div', { style: { fontSize: '11px', color: 'var(--color-text-tertiary)', marginTop: '3px' } },
+            movesForMon.length > 0
+              ? movesForMon.map(m => m.move + ' ×' + m.uses).join('  •  ')
+              : 'no moves recorded')
+        ]),
+        el('div', { style: { textAlign: 'right', flexShrink: '0' } }, [
+          el('div', { style: { fontSize: '11px', fontWeight: '600', display: 'flex', gap: '6px', justifyContent: 'flex-end', alignItems: 'center' } }, [
+            (r.kd + r.ki) > 0 ? el('span', { style: { color: 'var(--color-text-success)' } }, (r.kd + r.ki) + 'K') : null,
+            r.d > 0 ? el('span', { style: { color: 'var(--color-text-danger)' } }, r.d + 'D') : null,
+            teraType ? typeBadge(teraType) : null
+          ].filter(x => x)),
+          el('div', { style: { fontSize: '11px', color: 'var(--color-text-tertiary)', marginTop: '2px' } }, formatInt(r.dout) + '% dmg')
+        ])
       ]);
-    };
+    });
+
+    return el('div', {
+      style: {
+        flex: '1', minWidth: '0',
+        background: isWinner ? color + '10' : 'var(--color-background-secondary)',
+        border: '0.5px solid ' + (isWinner ? color + '50' : 'var(--color-border-tertiary)'),
+        borderRadius: 'var(--border-radius-lg)', padding: '14px 16px'
+      }
+    }, [
+      el('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' } }, [
+        coachBadge(coach),
+        isWinner ? el('span', { style: { fontSize: '11px', fontWeight: '700', color, textTransform: 'uppercase', letterSpacing: '0.6px' } }, 'Winner') : null
+      ].filter(x => x)),
+      el('div', {}, monRows)
+    ]);
+  };
+
+  // Group gids by week
+  const byWeek = {};
+  games.forEach(gid => {
+    const wk = h2hGl.find(r => r.gid === gid)?.wk;
+    if (!byWeek[wk]) byWeek[wk] = [];
+    byWeek[wk].push(gid);
+  });
+
+  const weekCards = Object.entries(byWeek).sort((a,b) => parseInt(a[0])-parseInt(b[0])).map(([wk, wkGids]) => {
+    // Series result for this week
+    const wkC1Wins = wkGids.filter(g => gameWinners[g] === c1).length;
+    const wkC2Wins = wkGids.filter(g => gameWinners[g] === c2).length;
+    const wkWinner = wkC1Wins > wkC2Wins ? c1 : wkC2Wins > wkC1Wins ? c2 : null;
+    const wkColor  = wkWinner ? (COACH_COLORS[wkWinner] || '#888') : 'var(--color-text-tertiary)';
+    const seriesLabel = wkWinner
+      ? `${wkWinner} wins ${Math.max(wkC1Wins,wkC2Wins)}-${Math.min(wkC1Wins,wkC2Wins)}`
+      : `${wkC1Wins}-${wkC2Wins}`;
+
+    // Individual game panels inside the week section
+    const gamePanels = wkGids.map((gid, gi) => {
+      const gameWinner = gameWinners[gid];
+      const gWinColor  = gameWinner ? (COACH_COLORS[gameWinner] || '#888') : 'var(--color-border-tertiary)';
+      return el('div', { style: { marginBottom: gi < wkGids.length - 1 ? '16px' : '0' } }, [
+        // Game label row
+        el('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' } }, [
+          el('span', { style: { fontSize: '11px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.7px', color: 'var(--color-text-tertiary)' } }, 'Game ' + (gi + 1)),
+          gameWinner ? el('span', { style: { fontSize: '11px', fontWeight: '600', color: gWinColor, background: gWinColor + '20', padding: '2px 8px', borderRadius: '999px' } }, gameWinner + ' wins') : null,
+        ].filter(x => x)),
+        // Two-col team panels
+        el('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' } },
+          [makeTeamPanel(gid, c1), makeTeamPanel(gid, c2)]
+        )
+      ]);
+    });
 
     return section(
-      'Game ' + g,
-      gid + (winner ? '  •  ' + winner + ' wins' : '  •  Result unknown'),
-      el('div', {
-        style: {
-          display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
-          gap: '12px',
-          padding: '16px 20px 20px'
-        }
-      }, [makeTeamPanel(c1), makeTeamPanel(c2)]),
-      { marginBottom: '1.25rem' }
+      'Week ' + wk,
+      seriesLabel,
+      el('div', { style: { padding: '16px 20px 20px' } }, gamePanels),
+      { marginBottom: '1.25rem', accentColor: wkColor }
     );
   });
 
-  return el('div', {}, [
-    controls,
-    scoreboard,
-    highlightsSection,
-    ...gameCards
-  ]);
+  return el('div', {}, [controls, scoreboard, highlightsSection, ...weekCards].filter(x => x));
 }
 
 
+// ── Mon Deep Dive ─────────────────────────────────────────────────────────────
 function viewMonDeepDive(state) {
   const { data } = state;
   const { coach, mon } = state.mdd;
@@ -1781,7 +2106,6 @@ function viewMonDeepDive(state) {
   }
 
   const moves = monMoveStats(data.moveLog, coach, state.mdd.mon);
-
   const teraTypes = {};
   data.turnLog.forEach(t => {
     if (t.coach === coach && t.mon === state.mdd.mon && t.event === 'TERA') {
@@ -1789,90 +2113,120 @@ function viewMonDeepDive(state) {
     }
   });
   const teraList = Object.entries(teraTypes).sort((a, b) => b[1] - a[1]);
-
   const coachColor = COACH_COLORS[coach] || '#888';
 
+  // ── Toggle: Stats vs Pokédex ───────────────────────────────────────────────
+  const ddTab = state.mdd.tab || 'stats';
+  const tabToggle = el('div', {
+    style: {
+      display:'inline-flex', background:'var(--color-background-secondary)',
+      border:'0.5px solid var(--color-border-tertiary)', borderRadius:'999px',
+      padding:'4px', gap:'2px', marginBottom:'1.5rem'
+    }
+  }, [
+    ['stats','📊 Stats'], ['pokedex','📖 Pokédex']
+  ].map(([id, label]) => {
+    const active = ddTab === id;
+    return el('button', {
+      onclick: () => { state.mdd.tab = id; render(state); },
+      style: {
+        padding:'7px 18px', fontSize:'13px',
+        fontWeight: active?'600':'500',
+        background: active?'var(--color-background-primary)':'transparent',
+        color: active?'var(--color-text-primary)':'var(--color-text-tertiary)',
+        border: active?'0.5px solid var(--color-border-secondary)':'none',
+        borderRadius:'999px', cursor:'pointer', transition:'all 0.2s', whiteSpace:'nowrap'
+      }
+    }, label);
+  }));
+
+  // ── Hero ───────────────────────────────────────────────────────────────────
   const hero = el('div', {
     style: {
-      position: 'relative',
-      background: 'radial-gradient(circle at 15% 50%, ' + coachColor + '30 0%, ' + coachColor + '0a 60%, transparent 100%), var(--color-background-primary)',
-      border: '0.5px solid ' + coachColor + '60',
-      borderRadius: 'var(--border-radius-lg)',
-      padding: '28px',
-      marginBottom: '1.25rem',
-      overflow: 'hidden'
+      display: 'flex', alignItems: 'center', gap: '20px', padding: '20px 24px',
+      background: `radial-gradient(circle at 5% 50%, ${coachColor}30 0%, transparent 60%), var(--color-background-primary)`,
+      border: `0.5px solid ${coachColor}50`, borderRadius: 'var(--border-radius-lg)', marginBottom: '1.25rem',
+      flexWrap: 'wrap'
     }
   }, [
-    el('div', {
+    monSprite(state.mdd.mon, 80),
+    el('div', { style: { flex: '1', minWidth: '0' } }, [
+      el('h2', { style: { fontFamily: 'var(--font-display)', fontSize: '28px', fontWeight: '700', margin: '0', letterSpacing: '-0.02em' } }, state.mdd.mon),
+      el('div', { style: { marginTop: '6px' } }, [coachBadge(coach)]),
+      el('div', { style: { display: 'flex', gap: '12px', marginTop: '10px', flexWrap: 'wrap' } }, [
+        el('span', { style: { fontSize: '13px', color: 'var(--color-text-secondary)' } }, `${s.gp} games  •  `),
+        el('span', { style: { fontSize: '13px', fontWeight: '600', color: s.winPct >= 0.5 ? 'var(--color-text-success)' : 'var(--color-text-danger)' } }, formatPct(s.winPct) + ' win rate'),
+        el('span', { style: { fontSize: '13px', color: 'var(--color-text-secondary)' } }, `  •  MVP: `),
+        el('span', { style: { fontFamily: 'var(--font-display)', fontSize: '15px', fontWeight: '700', color: coachColor } }, String(s.mvp)),
+      ])
+    ]),
+    teraList.length > 0 ? el('div', { style: { textAlign: 'right' } }, [
+      el('div', { style: { fontSize: '10px', color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px', fontWeight: '600' } }, 'Tera types'),
+      ...teraList.map(([type, count]) =>
+        el('div', { style: { fontSize: '12px', marginBottom: '3px', display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'flex-end' } }, [
+          el('span', { style: { fontWeight: '600' } }, type),
+          el('span', { style: { fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--color-text-tertiary)' } }, String(count) + 'x')
+        ])
+      )
+    ]) : null
+  ].filter(x => x));
+
+  if (ddTab === 'pokedex') {
+    const pokedexContainer = el('div', {});
+    renderPokedexView(state, coach, state.mdd.mon, pokedexContainer);
+    return el('div', {}, [controls, tabToggle, hero, pokedexContainer]);
+  }
+
+  // ── Stats tab ──────────────────────────────────────────────────────────────
+  const metric = (label, value, sub, tipText) => {
+    const wrapper = el('div', {
       style: {
-        display: 'grid',
-        gridTemplateColumns: 'auto 1fr',
-        gap: '28px',
-        alignItems: 'center'
+        background: 'var(--color-background-secondary)', border: '0.5px solid var(--color-border-tertiary)',
+        borderRadius: 'var(--border-radius-lg)', padding: '16px 18px'
       }
     }, [
-      el('div', {
-        style: {
-          width: '160px',
-          height: '160px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          background: 'rgba(255,255,255,0.04)',
-          border: '0.5px solid ' + coachColor + '30',
-          borderRadius: 'var(--border-radius-lg)',
-          flexShrink: '0'
-        }
-      }, monSprite(state.mdd.mon, 140)),
-      el('div', {}, [
-        el('div', { style: { marginBottom: '12px' } }, coachBadge(coach, 'lg')),
-        el('h1', {
-          style: {
-            fontFamily: 'var(--font-display)',
-            fontSize: '36px',
-            fontWeight: '700',
-            margin: '0 0 14px 0',
-            letterSpacing: '-0.03em',
-            lineHeight: '1.1'
-          }
-        }, state.mdd.mon),
-        el('div', { style: { display: 'flex', gap: '20px', flexWrap: 'wrap', fontSize: '13px', alignItems: 'center' } }, [
-          el('div', {}, [
-            el('span', { style: { color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.6px', fontSize: '11px', fontWeight: '600' } }, 'Record  '),
-            el('span', { style: { fontFamily: 'var(--font-mono)', fontWeight: '600', fontSize: '14px' } }, s.gw + '-' + (s.gp - s.gw))
-          ]),
-          el('div', {}, [
-            el('span', { style: { color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.6px', fontSize: '11px', fontWeight: '600' } }, 'MVP  '),
-            el('span', { style: { fontFamily: 'var(--font-display)', fontWeight: '700', fontSize: '16px' } }, String(s.mvp))
-          ]),
-          teraList.length > 0 ? el('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } }, [
-            el('span', { style: { color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.6px', fontSize: '11px', fontWeight: '600' } }, 'Tera'),
-            ...teraList.map(([type, n]) => el('span', {
-              style: { display: 'inline-flex', alignItems: 'center', gap: '5px' }
-            }, [typeBadge(type), n > 1 ? el('span', { style: { fontSize: '11px', color: 'var(--color-text-tertiary)', fontFamily: 'var(--font-mono)' } }, '×' + n) : null].filter(x => x)))
-          ]) : null
-        ].filter(x => x))
-      ])
-    ])
-  ]);
+      withTooltip(
+        el('div', { style: { fontSize: '10px', color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '8px', fontWeight: '600', display:'inline-block' } }, label),
+        tipText || TOOLTIPS[label]
+      ),
+      el('div', { style: { fontFamily: 'var(--font-display)', fontSize: '26px', fontWeight: '700', letterSpacing: '-0.02em', color: coachColor } }, value),
+      sub ? el('div', { style: { fontSize: '11px', color: 'var(--color-text-tertiary)', marginTop: '4px' } }, sub) : null
+    ].filter(x => x));
+    return wrapper;
+  };
 
   const metricsGrid = el('div', {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
-      gap: '10px',
-      marginBottom: '1.25rem'
-    }
+    style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '10px', marginBottom: '1.25rem' }
   }, [
     metric('Games', s.gp, s.gw + ' wins'),
-    metric('Win rate', formatPct(s.winPct)),
-    metric('Kills', s.tk, s.kd + ' KD / ' + s.ki + ' KI'),
-    metric('Deaths', s.deaths),
-    metric('K/D', formatKDR(s.kdr)),
-    metric('Damage', formatDmg(s.dout), formatInt(s.dmgPerGame) + '% per game'),
+    metric('Win rate', formatPct(s.winPct), null, TOOLTIPS['Win%']),
+    metric('Kills', s.tk, s.kd + ' KD / ' + s.ki + ' KI', TOOLTIPS['K']),
+    metric('Deaths', s.deaths, null, TOOLTIPS['D']),
+    metric('K/D', formatKDR(s.kdr), null, TOOLTIPS['K/D']),
+    metric('Damage', formatDmg(s.dout),
+      formatInt(s.dmgPerGame) + '% per game  •  ' + (s.dmgPerTurn > 0 ? s.dmgPerTurn.toFixed(1) + '% per turn' : ''),
+      'Total damage dealt. Hover sub-stats for details.'),
     metric('Switches', s.sw, (s.sw / Math.max(1, s.gp)).toFixed(1) + ' per game'),
-    metric('Tera', s.teras + '/' + s.gp, formatPct(s.teras / Math.max(1, s.gp)))
+    metric('Tera', s.teras + '/' + s.gp, formatPct(s.teras / Math.max(1, s.gp)), TOOLTIPS['Tera'])
   ]);
+
+  // Dmg breakdown sub-stats
+  const dmgBreakdown = el('div', {
+    style: { display:'flex', gap:'12px', flexWrap:'wrap', marginBottom:'1.25rem' }
+  }, [
+    el('div', {
+      style: { display:'flex', alignItems:'center', gap:'8px', padding:'8px 14px', background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-md)' }
+    }, [
+      withTooltip(el('span', { style:{ fontSize:'12px', color:'var(--color-text-tertiary)', fontWeight:'600', borderBottom:'1px dashed var(--color-text-tertiary)', cursor:'help' } }, 'Dmg/game'), TOOLTIPS['Dmg/G']),
+      el('span', { style:{ fontFamily:'var(--font-display)', fontWeight:'700', fontSize:'16px', marginLeft:'6px' } }, formatInt(s.dmgPerGame) + '%'),
+    ]),
+    s.dmgPerTurn > 0 ? el('div', {
+      style: { display:'flex', alignItems:'center', gap:'8px', padding:'8px 14px', background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-md)' }
+    }, [
+      withTooltip(el('span', { style:{ fontSize:'12px', color:'var(--color-text-tertiary)', fontWeight:'600', borderBottom:'1px dashed var(--color-text-tertiary)', cursor:'help' } }, 'Dmg/turn alive'), TOOLTIPS['Dmg/T']),
+      el('span', { style:{ fontFamily:'var(--font-display)', fontWeight:'700', fontSize:'16px', marginLeft:'6px' } }, s.dmgPerTurn.toFixed(1) + '%'),
+    ]) : null
+  ].filter(x=>x));
 
   let movesSection = null;
   if (moves.length > 0) {
@@ -1880,23 +2234,13 @@ function viewMonDeepDive(state) {
     const moveRows = moves.map(m => {
       const pct = maxUses > 0 ? m.uses / maxUses : 0;
       return [
-        el('span', { style: { textAlign: 'left', display: 'block', fontWeight: '600', fontSize: '13px' } }, m.move),
+        // Move name with hover tooltip from PokéAPI
+        moveTip(m.move),
         el('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', justifyContent: 'flex-end' } }, [
           el('div', {
-            style: {
-              width: '80px',
-              height: '6px',
-              background: 'var(--color-background-secondary)',
-              borderRadius: '3px',
-              overflow: 'hidden'
-            }
+            style: { width: '80px', height: '6px', background: 'var(--color-background-secondary)', borderRadius: '3px', overflow: 'hidden' }
           }, el('div', {
-            style: {
-              width: (pct * 100) + '%',
-              height: '100%',
-              background: coachColor,
-              boxShadow: '0 0 6px ' + coachColor + '80'
-            }
+            style: { width: (pct * 100) + '%', height: '100%', background: coachColor, boxShadow: '0 0 6px ' + coachColor + '80' }
           })),
           el('span', { style: { minWidth: '28px', textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: '600', fontSize: '13px' } }, formatInt(m.uses))
         ]),
@@ -1904,7 +2248,7 @@ function viewMonDeepDive(state) {
         m.avg.toFixed(1) + '%'
       ];
     });
-    movesSection = section('Moves used', moves.length + ' unique moves',
+    movesSection = section('Moves used', moves.length + ' unique moves — hover any move for details',
       el('div', { style: { overflowX: 'auto' } }, makeTable([
         { key: 'move', label: 'Move', align: 'left' },
         { key: 'uses', label: 'Uses', align: 'right' },
@@ -1913,7 +2257,7 @@ function viewMonDeepDive(state) {
       ], moveRows)));
   }
 
-  return el('div', {}, [controls, hero, metricsGrid, movesSection].filter(x => x));
+  return el('div', {}, [controls, tabToggle, hero, metricsGrid, dmgBreakdown, movesSection].filter(x => x));
 }
 function viewCoachPanel(state) {
   const { data } = state;
@@ -1949,6 +2293,9 @@ function viewCoachPanel(state) {
 
     insights = { topDamage: byDmg[0], topKiller: byKills[0], topMVP: byMVP[0], topProtector, topTeraUser };
   }
+
+  // Carry score
+  const carry = computeCarryScore(data.gameLog, coach);
 
   const matchMap = {};
   data.gameLog.filter(r => r.coach === coach).forEach(r => {
@@ -2117,12 +2464,47 @@ function viewCoachPanel(state) {
       return cardEl;
     };
 
+    // Carry score card
+    const carryCard = carry.pct > 0 ? (() => {
+      const card = el('div', {
+        onclick: () => { state.view = 'mon'; state.mdd.coach = coach; state.mdd.mon = carry.mon; render(state); },
+        style: {
+          background: 'var(--color-background-secondary)', border: '0.5px solid var(--color-border-tertiary)',
+          borderRadius: 'var(--border-radius-lg)', padding: '16px', cursor: 'pointer',
+          transition: 'all 0.15s', position: 'relative', overflow: 'hidden'
+        }
+      }, [
+        el('div', { style: { position:'absolute', top:'14px', right:'14px', width:'32px', height:'32px', borderRadius:'50%', background:coachColor+'25', color:coachColor, display:'flex', alignItems:'center', justifyContent:'center', fontSize:'16px' } }, '💪'),
+        el('div', { style: { fontSize:'10px', color:'var(--color-text-tertiary)', textTransform:'uppercase', letterSpacing:'0.8px', marginBottom:'12px', paddingRight:'36px', fontWeight:'600' } }, 'Carry score'),
+        el('div', { style: { display:'flex', alignItems:'center', gap:'12px', marginBottom:'6px' } }, [
+          monSprite(carry.mon, 44),
+          el('div', { style: { minWidth:'0' } }, [
+            el('div', { style: { fontWeight:'600', fontSize:'14px', lineHeight:'1.2', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' } }, carry.mon),
+            el('div', { style: { fontSize:'11px', color:'var(--color-text-tertiary)', marginTop:'3px' } }, 'of team kills + damage')
+          ])
+        ]),
+        el('div', { style: { marginTop:'10px' } }, [
+          el('div', { style: { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'4px' } }, [
+            el('span', { style: { fontFamily:'var(--font-display)', fontSize:'22px', fontWeight:'700', color:coachColor, letterSpacing:'-0.02em' } }, carry.pct + '%'),
+            el('span', { style: { fontSize:'11px', color:'var(--color-text-tertiary)' } }, 'team contribution')
+          ]),
+          el('div', { style: { height:'6px', background:'var(--color-background-tertiary)', borderRadius:'3px', overflow:'hidden' } }, [
+            el('div', { style: { height:'100%', width:carry.pct+'%', background:coachColor, borderRadius:'3px', transition:'width 0.5s ease' } })
+          ])
+        ])
+      ]);
+      card.onmouseover = () => { card.style.transform='translateY(-3px)'; card.style.borderColor=coachColor+'70'; card.style.background='var(--color-background-primary)'; };
+      card.onmouseout  = () => { card.style.transform=''; card.style.borderColor='var(--color-border-tertiary)'; card.style.background='var(--color-background-secondary)'; };
+      return card;
+    })() : null;
+
     const insightCards = [
       insights.topMVP ? mkInsight('Team MVP', 'M', insights.topMVP.mon, insights.topMVP.mvp + ' pts', insights.topMVP.tk + ' K / ' + insights.topMVP.gw + ' W') : null,
       insights.topDamage ? mkInsight('Top damage', 'D', insights.topDamage.mon, formatDmg(insights.topDamage.dout), formatInt(insights.topDamage.dmgPerGame) + '% per game') : null,
       insights.topKiller ? mkInsight('Top killer', 'K', insights.topKiller.mon, insights.topKiller.tk + ' kills', formatKDR(insights.topKiller.kdr) + ' K/D') : null,
       insights.topProtector ? mkInsight('Protect blocks', 'P', insights.topProtector[0], insights.topProtector[1] + ' blocks', 'defensive pivot') : null,
-      insights.topTeraUser ? mkInsight('Tera devotee', 'T', insights.topTeraUser[0], insights.topTeraUser[1] + ' teras', 'clutch commits') : null
+      insights.topTeraUser ? mkInsight('Tera devotee', 'T', insights.topTeraUser[0], insights.topTeraUser[1] + ' teras', 'clutch commits') : null,
+      carryCard
     ].filter(x => x);
 
     insightsSection = section('Team insights', 'Click any card to see that Pokemon in detail',
@@ -2227,7 +2609,33 @@ function viewCoachPanel(state) {
 
   const matchesSection = section('Match history', matches.length + ' matches — click any row to open H2H', matchTable);
 
-  return el('div', {}, [controls, hero, insightsSection, rosterSection, matchesSection].filter(x => x));
+  // Roster / Match History tab toggle
+  const cpTab = state.cp.tab || 'roster';
+  const cpTabBar = el('div', {
+    style: {
+      display:'inline-flex', background:'var(--color-background-secondary)',
+      border:'0.5px solid var(--color-border-tertiary)', borderRadius:'999px',
+      padding:'4px', gap:'2px', marginBottom:'1.25rem'
+    }
+  }, [
+    ['roster','Full Roster'], ['history','Match History']
+  ].map(([id, label]) => {
+    const active = cpTab === id;
+    return el('button', {
+      onclick: () => { state.cp.tab = id; render(state); },
+      style: {
+        padding:'7px 18px', fontSize:'13px',
+        fontWeight: active?'600':'500',
+        background: active?'var(--color-background-primary)':'transparent',
+        color: active?'var(--color-text-primary)':'var(--color-text-tertiary)',
+        border: active?'0.5px solid var(--color-border-secondary)':'none',
+        borderRadius:'999px', cursor:'pointer', transition:'all 0.2s', whiteSpace:'nowrap'
+      }
+    }, label);
+  }));
+
+  const activeSection = cpTab === 'roster' ? rosterSection : matchesSection;
+  return el('div', {}, [controls, hero, insightsSection, cpTabBar, activeSection].filter(x => x));
 }
 function viewCustomQuery(state) {
   const q = state.query;
