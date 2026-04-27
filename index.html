@@ -3881,6 +3881,1108 @@ function renderPlayoffStats(state, seeds, bracket) {
     )
   ]);
 }
+// ============================================================
+// G-FORCE LEAGUE HUB — embedded module
+// Supabase config
+// ============================================================
+const HUB_URL = 'https://zdwmtffbpgdqngvjyvid.supabase.co';
+const HUB_KEY = 'sb_publishable_oxNYSbfajq6FIC_D27xWEQ_0jIhCvx7';
+const HUB_SEASON = 2027;
+const HUB_BUDGET = 100;
+const HUB_ROSTER_SIZE = 10;
+const HUB_ADMIN_PASS = 'gforce2026';
+
+let _sbClient = null;
+function getSB() {
+  if (!_sbClient) {
+    if (!window.supabase) {
+      console.error('Supabase SDK not loaded. Make sure you are viewing this file from a web server, not file://');
+      hubToast('League Hub requires an internet connection to load.', 'error');
+      throw new Error('Supabase not loaded');
+    }
+    _sbClient = window.supabase.createClient(HUB_URL, HUB_KEY);
+  }
+  return _sbClient;
+}
+
+// Hub state (separate from dashboard state)
+const hubState = {
+  user: null,
+  coaches: [],
+  pool: [],
+  draft: null,
+  picks: [],
+  rosters: {},
+  trades: [],
+  waivers: [],
+  view: 'rosters',
+  loading: false,
+};
+
+// ── Auth ──────────────────────────────────────────────────
+async function hubLogin(username, password) {
+  const sb = getSB();
+
+  // Commissioner master password bypasses DB
+  if (password === HUB_ADMIN_PASS) {
+    const { data: commData } = await sb.from('coaches').select('*').eq('is_commissioner', true).single();
+    hubState.user = commData || {
+      username: 'commissioner', display_name: 'Commissioner',
+      team_name: 'Admin', is_commissioner: true
+    };
+    return { ok: true };
+  }
+
+  const { data, error } = await sb.from('coaches').select('*').eq('username', username.toLowerCase()).single();
+  if (error || !data) return { ok: false, msg: 'Username not found.' };
+  if (data.password_hash !== password) return { ok: false, msg: 'Incorrect password.' };
+  hubState.user = data;
+  return { ok: true };
+}
+
+function hubLogout(dashState) {
+  hubState.user = null;
+  dashState.view = 'standings';
+  render(dashState);
+}
+
+// ── Data loader ───────────────────────────────────────────
+async function hubLoadAll() {
+  const sb = getSB();
+  const [coachesRes, poolRes, draftRes, picksRes, rostersRes, tradesRes, waiversRes] = await Promise.all([
+    sb.from('coaches').select('*').order('display_name'),
+    sb.from('pokemon_pool').select('*').order('cost').order('name'),
+    sb.from('draft_config').select('*').eq('season', HUB_SEASON).single(),
+    sb.from('draft_picks').select('*').eq('season', HUB_SEASON).order('pick_number'),
+    sb.from('rosters').select('*').eq('season', HUB_SEASON),
+    sb.from('trades').select('*').eq('season', HUB_SEASON).order('proposed_at', { ascending: false }),
+    sb.from('waiver_claims').select('*').eq('season', HUB_SEASON).order('claimed_at', { ascending: false }),
+  ]);
+  hubState.coaches = coachesRes.data?.filter(c => !c.is_commissioner) || [];
+  hubState.pool    = poolRes.data || [];
+  hubState.draft   = draftRes.data;
+  hubState.picks   = picksRes.data || [];
+  hubState.trades  = tradesRes.data || [];
+  hubState.waivers = waiversRes.data || [];
+  hubState.rosters = {};
+  (rostersRes.data || []).forEach(r => {
+    if (!hubState.rosters[r.coach_username]) hubState.rosters[r.coach_username] = [];
+    hubState.rosters[r.coach_username].push(r);
+  });
+}
+
+async function hubAudit(action, details) {
+  await getSB().from('audit_log').insert({ action, actor: hubState.user?.username, details });
+}
+
+// ── Cost helpers ──────────────────────────────────────────
+function hubCostClass(c) {
+  if (c === 0) return 'hub-cost-0';
+  if (c <= 7)  return 'hub-cost-lo';
+  if (c <= 14) return 'hub-cost-md';
+  return 'hub-cost-hi';
+}
+
+function hubCostPill(cost) {
+  const d = el('div', {
+    style: {
+      display:'inline-flex', alignItems:'center', justifyContent:'center',
+      width:'26px', height:'26px', borderRadius:'999px',
+      fontFamily:'var(--font-mono)', fontSize:'11px', fontWeight:'600', flexShrink:'0',
+      background: cost===0?'rgba(74,85,104,0.4)':cost<=7?'rgba(52,211,153,0.2)':cost<=14?'rgba(251,191,36,0.2)':'rgba(248,113,113,0.2)',
+      color: cost===0?'#4a5568':cost<=7?'#34d399':cost<=14?'#fbbf24':'#f87171',
+    }
+  }, String(cost));
+  return d;
+}
+
+function hubBadge(status) {
+  const colors = {
+    pending:  ['rgba(251,191,36,0.15)','#fbbf24'],
+    accepted: ['rgba(52,211,153,0.15)','#34d399'],
+    approved: ['rgba(52,211,153,0.2)', '#34d399'],
+    declined: ['rgba(248,113,113,0.15)','#f87171'],
+    vetoed:   ['rgba(248,113,113,0.2)', '#f87171'],
+    cancelled:['rgba(74,85,104,0.3)',  '#4a5568'],
+    draft:    ['rgba(240,192,64,0.15)','#f0c040'],
+    trade:    ['rgba(129,140,248,0.15)','#a5b4fc'],
+    waiver:   ['rgba(52,211,153,0.15)','#34d399'],
+  };
+  const [bg, color] = colors[status] || colors.pending;
+  return el('span', {
+    style: { display:'inline-flex', alignItems:'center', padding:'2px 8px', borderRadius:'999px', fontSize:'11px', fontWeight:'700', background:bg, color }
+  }, status.toUpperCase());
+}
+
+// ── Toast ─────────────────────────────────────────────────
+function hubToast(msg, type='info') {
+  let area = document.getElementById('hub-toast-area');
+  if (!area) {
+    area = el('div', { style:{ position:'fixed', bottom:'24px', right:'24px', zIndex:'9999', display:'flex', flexDirection:'column', gap:'8px' } });
+    area.id = 'hub-toast-area';
+    document.body.appendChild(area);
+  }
+  const colors = { info:'#f0c040', success:'#34d399', error:'#f87171' };
+  const t = el('div', {
+    style:{
+      background:'var(--color-background-primary)', border:'0.5px solid var(--color-border-secondary)',
+      borderLeft:'3px solid '+colors[type], borderRadius:'var(--border-radius-md)',
+      padding:'10px 14px', fontSize:'13px', fontWeight:'500',
+      boxShadow:'0 8px 32px rgba(0,0,0,0.35)', maxWidth:'300px',
+      animation:'none', opacity:'1', transition:'opacity 0.3s'
+    }
+  }, msg);
+  area.appendChild(t);
+  setTimeout(() => { t.style.opacity='0'; setTimeout(()=>t.remove(), 300); }, 3500);
+}
+
+// ============================================================
+// HUB MAIN RENDERER — called from renderRegularSeasonMode
+// ============================================================
+function renderHubMode(dashState, root) {
+  // Top header strip
+  const header = el('div', {
+    style:{ marginBottom:'1.5rem' }
+  }, [
+    el('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:'16px', flexWrap:'wrap' } }, [
+      el('div', {}, [
+        el('h1', {
+          style:{ fontFamily:'var(--font-display)', fontSize:'32px', fontWeight:'700', margin:'0', letterSpacing:'-0.02em', color:'var(--color-text-primary)' }
+        }, '⚡ League Hub'),
+        el('div', { style:{ fontSize:'12px', color:'var(--color-text-tertiary)', marginTop:'6px', textTransform:'uppercase', letterSpacing:'0.7px', fontWeight:'600' } },
+          'Season ' + HUB_SEASON + '  •  Logged in as ' + (hubState.user?.display_name || '?'))
+      ]),
+      el('div', { style:{ display:'flex', gap:'8px', alignItems:'center' } }, [
+        el('button', {
+          onclick: () => { dashState.view='standings'; render(dashState); },
+          style:{ display:'inline-flex', alignItems:'center', gap:'6px', padding:'7px 14px', fontSize:'12px', fontWeight:'500', background:'var(--color-background-secondary)', color:'var(--color-text-secondary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-md)', cursor:'pointer' }
+        }, '← Back to Stats'),
+        el('button', {
+          onclick: () => hubLogout(dashState),
+          style:{ display:'inline-flex', alignItems:'center', gap:'6px', padding:'7px 14px', fontSize:'12px', fontWeight:'500', background:'var(--color-background-secondary)', color:'var(--color-text-secondary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-md)', cursor:'pointer' }
+        }, 'Sign out'),
+      ])
+    ])
+  ]);
+
+  // Hub nav tabs
+  const hubTabs = [
+    { id:'rosters',  label:'Rosters' },
+    { id:'draft',    label:'Draft' },
+    { id:'trades',   label:'Trades' },
+    { id:'waivers',  label:'Waivers' },
+    { id:'pool',     label:'Pokémon Pool' },
+    { id:'log',      label:'Audit Log' },
+  ];
+  if (hubState.user?.is_commissioner) hubTabs.push({ id:'admin', label:'⚙ Admin' });
+
+  const tabBar = el('div', {
+    style:{ display:'flex', gap:'4px', flexWrap:'wrap', borderBottom:'0.5px solid var(--color-border-tertiary)', marginBottom:'1.5rem' }
+  }, hubTabs.map(t => tab(t.label, hubState.view===t.id, () => { hubState.view=t.id; render(dashState); })));
+
+  // Content
+  const contentWrap = el('div', {});
+  if (hubState.loading) {
+    contentWrap.appendChild(el('div', { style:{ padding:'40px', textAlign:'center', color:'var(--color-text-tertiary)' } }, 'Loading…'));
+  } else {
+    if (hubState.view==='rosters')  contentWrap.appendChild(hubViewRosters(dashState));
+    if (hubState.view==='draft')    contentWrap.appendChild(hubViewDraft(dashState));
+    if (hubState.view==='trades')   contentWrap.appendChild(hubViewTrades(dashState));
+    if (hubState.view==='waivers')  contentWrap.appendChild(hubViewWaivers(dashState));
+    if (hubState.view==='pool')     contentWrap.appendChild(hubViewPool(dashState));
+    if (hubState.view==='admin')    contentWrap.appendChild(hubViewAdmin(dashState));
+    if (hubState.view==='log')      contentWrap.appendChild(hubViewLog(dashState));
+  }
+
+  root.appendChild(header);
+  root.appendChild(tabBar);
+  root.appendChild(contentWrap);
+}
+
+// ── Login modal ───────────────────────────────────────────
+function renderHubLoginModal(dashState, root) {
+  const backdrop = el('div', {
+    style:{ position:'fixed', inset:'0', background:'rgba(0,0,0,0.6)', zIndex:'500', display:'flex', alignItems:'center', justifyContent:'center' }
+  });
+
+  const usernameInput = el('input', { type:'text', placeholder:'e.g. abbey', autocomplete:'username',
+    style:{ width:'100%', padding:'10px 12px', background:'var(--color-background-tertiary)', border:'0.5px solid var(--color-border-secondary)', borderRadius:'var(--border-radius-md)', color:'var(--color-text-primary)', fontFamily:'var(--font-body)', fontSize:'14px', outline:'none' }
+  });
+  const passwordInput = el('input', { type:'password', autocomplete:'current-password',
+    style:{ width:'100%', padding:'10px 12px', background:'var(--color-background-tertiary)', border:'0.5px solid var(--color-border-secondary)', borderRadius:'var(--border-radius-md)', color:'var(--color-text-primary)', fontFamily:'var(--font-body)', fontSize:'14px', outline:'none' }
+  });
+  const errMsg = el('div', { style:{ fontSize:'12px', color:'#f87171', minHeight:'16px', marginBottom:'8px' } });
+  const loginBtn = el('button', {
+    style:{ width:'100%', padding:'10px', background:'#f0c040', color:'#000', border:'none', borderRadius:'var(--border-radius-md)', fontFamily:'var(--font-body)', fontSize:'14px', fontWeight:'700', cursor:'pointer' }
+  }, 'Sign in');
+
+  async function attemptLogin() {
+    loginBtn.disabled = true; loginBtn.textContent = 'Signing in…';
+    errMsg.textContent = '';
+    const result = await hubLogin(usernameInput.value.trim(), passwordInput.value);
+    if (result.ok) {
+      hubState.loading = true;
+      dashState.view = 'hub';
+      render(dashState);
+      await hubLoadAll();
+      hubState.loading = false;
+      render(dashState);
+    } else {
+      errMsg.textContent = result.msg;
+      loginBtn.disabled = false; loginBtn.textContent = 'Sign in';
+    }
+  }
+
+  loginBtn.onclick = attemptLogin;
+  passwordInput.onkeydown = (e) => { if (e.key==='Enter') attemptLogin(); };
+  usernameInput.onkeydown = (e) => { if (e.key==='Enter') passwordInput.focus(); };
+
+  const box = el('div', {
+    style:{
+      width:'360px', background:'var(--color-background-primary)', border:'0.5px solid var(--color-border-secondary)',
+      borderRadius:'16px', padding:'36px 32px', boxShadow:'0 24px 80px rgba(0,0,0,0.5)'
+    }
+  }, [
+    el('div', { style:{ fontFamily:'var(--font-display)', fontSize:'28px', letterSpacing:'0.04em', color:'#f0c040', textAlign:'center', marginBottom:'4px' } }, '⚡ League Hub'),
+    el('div', { style:{ textAlign:'center', fontSize:'12px', color:'var(--color-text-tertiary)', marginBottom:'28px' } }, 'Season ' + HUB_SEASON),
+    el('div', { style:{ fontSize:'11px', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.06em', color:'var(--color-text-secondary)', marginBottom:'6px' } }, 'Username'),
+    el('div', { style:{ marginBottom:'14px' } }, usernameInput),
+    el('div', { style:{ fontSize:'11px', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.06em', color:'var(--color-text-secondary)', marginBottom:'6px' } }, 'Password'),
+    el('div', { style:{ marginBottom:'8px' } }, passwordInput),
+    errMsg,
+    loginBtn,
+    el('button', {
+      onclick: () => { dashState.view='standings'; render(dashState); },
+      style:{ width:'100%', marginTop:'10px', padding:'8px', background:'transparent', color:'var(--color-text-tertiary)', border:'none', cursor:'pointer', fontSize:'13px' }
+    }, '← Back to stats without logging in')
+  ]);
+
+  backdrop.appendChild(box);
+  root.appendChild(backdrop);
+}
+
+// ============================================================
+// HUB VIEWS
+// ============================================================
+
+// ── Rosters ───────────────────────────────────────────────
+function hubViewRosters(dashState) {
+  const wrap = el('div', {});
+
+  const coachSel = el('select', {
+    style:{ padding:'7px 10px', background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-secondary)', borderRadius:'var(--border-radius-md)', color:'var(--color-text-primary)', fontFamily:'var(--font-body)', fontSize:'13px', marginBottom:'1.25rem' }
+  });
+  [[hubState.user.username, hubState.user.display_name + ' (me)'], ...hubState.coaches.filter(c=>c.username!==hubState.user.username).map(c=>[c.username,c.display_name])].forEach(([u,l]) => {
+    const o = el('option', { value:u }, l);
+    if (u === hubState.user.username) o.selected = true;
+    coachSel.appendChild(o);
+  });
+
+  const panel = el('div', {});
+
+  function buildPanel(username) {
+    panel.innerHTML = '';
+    const coach = hubState.coaches.find(c=>c.username===username) || hubState.user;
+    const roster = hubState.rosters[username] || [];
+    const spent = roster.reduce((s,r)=>s+r.cost,0);
+    const remaining = HUB_BUDGET - spent;
+    const pct = Math.min(100, spent/HUB_BUDGET*100);
+    const fillColor = pct>90?'#f87171':pct>70?'#fbbf24':'#34d399';
+    const color = COACH_COLORS[username] || '#888';
+    const isMe = username === hubState.user.username;
+
+    const card = el('div', { style:{ background:'var(--color-background-secondary)', border:'0.5px solid '+color+'50', borderRadius:'var(--border-radius-lg)', padding:'20px', borderLeft:'3px solid '+color } });
+
+    // Header
+    card.appendChild(el('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'16px', flexWrap:'wrap', gap:'12px' } }, [
+      el('div', {}, [
+        el('div', { style:{ fontFamily:'var(--font-display)', fontSize:'22px', letterSpacing:'-0.01em' } }, coach.display_name || username),
+        el('div', { style:{ fontSize:'12px', color:'var(--color-text-tertiary)', marginTop:'3px' } }, coach.team_name || ''),
+      ]),
+      el('div', { style:{ textAlign:'right' } }, [
+        el('div', { style:{ fontFamily:'var(--font-mono)', fontSize:'24px', fontWeight:'600', color:fillColor } }, spent + el('span',{style:{fontSize:'13px',color:'var(--color-text-secondary)'}}, ' / '+HUB_BUDGET+' pts').outerHTML),
+        el('div', { style:{ fontSize:'11px', color:'var(--color-text-tertiary)', marginTop:'3px' } }, remaining+' pts left  •  '+roster.length+'/'+HUB_ROSTER_SIZE+' Pokémon')
+      ])
+    ]));
+
+    // Budget bar
+    const track = el('div', { style:{ height:'6px', background:'var(--color-background-tertiary)', borderRadius:'3px', overflow:'hidden', marginBottom:'20px' } });
+    const fill  = el('div', { style:{ height:'100%', width:pct+'%', background:fillColor, borderRadius:'3px', transition:'width 0.4s' } });
+    track.appendChild(fill); card.appendChild(track);
+
+    // Roster grid
+    const grid = el('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))', gap:'8px' } });
+    for (let i=0; i<HUB_ROSTER_SIZE; i++) {
+      const mon = roster[i];
+      if (mon) {
+        const slot = el('div', { style:{ display:'flex', alignItems:'center', gap:'8px', padding:'10px 12px', background:'var(--color-background-tertiary)', borderRadius:'var(--border-radius-md)', border:'0.5px solid var(--color-border-tertiary)' } }, [
+          el('span', { style:{ fontFamily:'var(--font-mono)', fontSize:'10px', color:'var(--color-text-tertiary)', minWidth:'18px' } }, String(i+1)),
+          hubCostPill(mon.cost),
+          el('div', { style:{ flex:'1', minWidth:'0' } }, [
+            el('div', { style:{ fontSize:'13px', fontWeight:'500', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' } }, mon.pokemon_name),
+            el('div', { style:{ fontSize:'10px', color:'var(--color-text-tertiary)' } }, mon.acquired_via)
+          ])
+        ]);
+        grid.appendChild(slot);
+      } else {
+        const slot = el('div', { style:{ display:'flex', alignItems:'center', gap:'8px', padding:'10px 12px', border:'0.5px dashed var(--color-border-tertiary)', borderRadius:'var(--border-radius-md)', opacity:'0.4' } }, [
+          el('span', { style:{ fontFamily:'var(--font-mono)', fontSize:'10px', color:'var(--color-text-tertiary)', minWidth:'18px' } }, String(i+1)),
+          el('span', { style:{ color:'var(--color-text-tertiary)', fontSize:'12px' } }, 'Empty')
+        ]);
+        grid.appendChild(slot);
+      }
+    }
+    card.appendChild(grid);
+
+    // Trade button
+    if (!isMe && roster.length > 0 && (hubState.rosters[hubState.user.username]||[]).length > 0) {
+      const tradeBtn = el('button', {
+        onclick: () => { hubShowTradeModal(dashState, username); },
+        style:{ marginTop:'12px', padding:'7px 14px', fontSize:'12px', fontWeight:'500', background:'var(--color-background-tertiary)', color:'var(--color-text-secondary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-md)', cursor:'pointer' }
+      }, '📤 Propose Trade with ' + (coach.display_name || username));
+      card.appendChild(tradeBtn);
+    }
+
+    panel.appendChild(card);
+  }
+
+  coachSel.onchange = (e) => buildPanel(e.target.value);
+  buildPanel(hubState.user.username);
+
+  wrap.appendChild(coachSel);
+  wrap.appendChild(panel);
+  return wrap;
+}
+
+// ── Draft ─────────────────────────────────────────────────
+function hubViewDraft(dashState) {
+  const draft = hubState.draft;
+  const wrap = el('div', {});
+
+  if (!draft || draft.status === 'pre') {
+    const msg = el('div', { style:{ background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-lg)', padding:'40px', textAlign:'center', color:'var(--color-text-tertiary)' } }, [
+      el('div', { style:{ fontSize:'32px', marginBottom:'12px' } }, '📋'),
+      el('div', { style:{ fontWeight:'600', marginBottom:'6px' } }, 'Draft not started yet'),
+      el('div', { style:{ fontSize:'12px' } }, 'The commissioner will kick it off when everyone is ready.')
+    ]);
+    wrap.appendChild(msg);
+    if (hubState.user?.is_commissioner) wrap.appendChild(hubDraftAdminPanel(dashState));
+    return wrap;
+  }
+
+  if (draft.status === 'complete') {
+    wrap.appendChild(el('div', { style:{ fontWeight:'600', marginBottom:'16px', color:'var(--color-text-secondary)' } }, '✅ Draft complete'));
+    wrap.appendChild(hubPicksTable());
+    return wrap;
+  }
+
+  // Active draft
+  const takenNames = new Set(hubState.picks.map(p => p.pokemon_name));
+  const n = draft.num_coaches || 12;
+  const order = draft.snake_order || [];
+  const overallPick = draft.current_pick || 1;
+  const round = Math.ceil(overallPick / n);
+  const idx = overallPick - 1;
+  const ri = Math.floor(idx / n);
+  const pi = idx % n;
+  const onClock = ri%2===0 ? order[pi] : order[n-1-pi];
+  const isMyTurn = onClock === hubState.user?.username;
+  const myRoster = hubState.rosters[hubState.user?.username] || [];
+  const mySpent = myRoster.reduce((s,r)=>s+r.cost,0);
+  const myRemaining = HUB_BUDGET - mySpent;
+
+  // Status row
+  const clockColor = COACH_COLORS[onClock] || '#f0c040';
+  const statusRow = el('div', { style:{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px', marginBottom:'1.25rem' } }, [
+    el('div', { style:{ background:'var(--color-background-secondary)', border:'0.5px solid '+clockColor+'50', borderRadius:'var(--border-radius-lg)', padding:'20px' } }, [
+      el('div', { style:{ fontSize:'11px', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.7px', color:'var(--color-text-tertiary)', marginBottom:'10px' } }, 'On the Clock'),
+      el('div', { style:{ fontFamily:'var(--font-display)', fontSize:'28px', color:clockColor, letterSpacing:'-0.01em', marginBottom:'6px' } }, onClock || '—'),
+      el('div', { style:{ fontSize:'12px', color:'var(--color-text-tertiary)' } }, 'Round '+round+'  •  Pick '+overallPick+' of '+(n*HUB_ROSTER_SIZE)),
+      isMyTurn ? el('div', { style:{ marginTop:'10px', padding:'6px 12px', background:'rgba(240,192,64,0.15)', borderRadius:'var(--border-radius-md)', fontSize:'13px', fontWeight:'600', color:'#f0c040' } }, '🎯 It\'s your turn!') : null,
+      hubState.user?.is_commissioner ? el('button', {
+        onclick: async () => {
+          await getSB().from('draft_config').update({ current_pick: overallPick+1, updated_at:new Date().toISOString() }).eq('id', draft.id);
+          await hubAudit('DRAFT_FORCE_ADVANCE', { from:overallPick, to:overallPick+1 });
+          await hubLoadAll(); render(dashState);
+        },
+        style:{ marginTop:'10px', padding:'5px 12px', fontSize:'11px', background:'var(--color-background-tertiary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-md)', cursor:'pointer', color:'var(--color-text-secondary)' }
+      }, '⏭ Force advance') : null
+    ].filter(x=>x)),
+    el('div', { style:{ background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-lg)', padding:'20px' } }, [
+      el('div', { style:{ fontSize:'11px', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.7px', color:'var(--color-text-tertiary)', marginBottom:'10px' } }, 'My Budget'),
+      el('div', { style:{ fontFamily:'var(--font-mono)', fontSize:'24px', fontWeight:'600', color:mySpent/HUB_BUDGET>0.9?'#f87171':mySpent/HUB_BUDGET>0.7?'#fbbf24':'#34d399' } }, mySpent + ' / ' + HUB_BUDGET),
+      el('div', { style:{ height:'6px', background:'var(--color-background-tertiary)', borderRadius:'3px', overflow:'hidden', margin:'8px 0' } }, [
+        el('div', { style:{ height:'100%', width:Math.min(100,mySpent/HUB_BUDGET*100)+'%', background:mySpent/HUB_BUDGET>0.9?'#f87171':mySpent/HUB_BUDGET>0.7?'#fbbf24':'#34d399', borderRadius:'3px' } })
+      ]),
+      el('div', { style:{ fontSize:'11px', color:'var(--color-text-tertiary)' } }, myRoster.length+'/'+HUB_ROSTER_SIZE+' Pokémon  •  '+myRemaining+' pts left'),
+      el('div', { style:{ marginTop:'10px', display:'flex', flexWrap:'wrap', gap:'4px' } }, myRoster.map(r =>
+        el('span', { style:{ fontSize:'11px', padding:'2px 7px', background:'var(--color-background-tertiary)', borderRadius:'999px', border:'0.5px solid var(--color-border-tertiary)' } }, r.pokemon_name)
+      ))
+    ])
+  ]);
+
+  // Pick queue (next 8)
+  const queueRow = el('div', { style:{ display:'flex', gap:'6px', overflowX:'auto', paddingBottom:'4px', marginBottom:'1.25rem' } });
+  for (let i=idx; i<Math.min(idx+8, n*HUB_ROSTER_SIZE); i++) {
+    const r2 = Math.floor(i/n), p2 = i%n;
+    const coach = r2%2===0 ? order[p2] : order[n-1-p2];
+    const isCurrent = i===idx;
+    const c = COACH_COLORS[coach] || '#888';
+    const chip = el('div', {
+      style:{
+        flexShrink:'0', padding:'5px 12px', borderRadius:'999px', fontSize:'11px', fontWeight:'600',
+        background: isCurrent ? '#f0c040' : 'var(--color-background-secondary)',
+        color: isCurrent ? '#000' : c,
+        border: isCurrent ? 'none' : '0.5px solid var(--color-border-tertiary)'
+      }
+    }, [el('div', { style:{ fontSize:'9px', opacity:'0.6' } }, '#'+(i+1)), el('div', {}, coach)]);
+    queueRow.appendChild(chip);
+  }
+
+  // Filter
+  const filterInput = el('input', {
+    placeholder:'🔍 Filter Pokémon…',
+    style:{ padding:'8px 12px', background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-secondary)', borderRadius:'var(--border-radius-md)', color:'var(--color-text-primary)', fontFamily:'var(--font-body)', fontSize:'13px', marginBottom:'12px', width:'280px', outline:'none' }
+  });
+
+  // Pool grid
+  const poolGrid = el('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(180px,1fr))', gap:'8px' } });
+
+  function buildPoolGrid(filter='') {
+    poolGrid.innerHTML = '';
+    hubState.pool.filter(m=>m.is_available).forEach(mon => {
+      if (filter && !mon.name.toLowerCase().includes(filter.toLowerCase())) return;
+      const taken = takenNames.has(mon.name);
+      const canAfford = myRemaining >= mon.cost;
+      const canPick = isMyTurn && !taken && canAfford && myRoster.length < HUB_ROSTER_SIZE;
+
+      const monEl = el('div', {
+        style:{
+          display:'flex', alignItems:'center', gap:'8px', padding:'9px 11px',
+          background: taken?'var(--color-background-tertiary)':'var(--color-background-secondary)',
+          border:'0.5px solid var(--color-border-tertiary)',
+          borderRadius:'var(--border-radius-md)',
+          opacity: (taken || (!isMyTurn && !taken) || !canAfford) && !taken ? (canPick?'1':'0.45') : taken?'0.3':'1',
+          cursor: canPick?'pointer':'default',
+          transition:'all 0.1s'
+        }
+      }, [
+        hubCostPill(mon.cost),
+        el('div', { style:{ flex:'1', minWidth:'0' } }, [
+          el('div', { style:{ fontSize:'12px', fontWeight:'500', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' } }, mon.name),
+          taken ? el('div', { style:{ fontSize:'10px', color:'var(--color-text-tertiary)' } }, 'taken') : null
+        ].filter(x=>x))
+      ]);
+
+      if (canPick) {
+        monEl.onmouseover = () => { monEl.style.borderColor='#f0c040'; monEl.style.background='rgba(240,192,64,0.08)'; };
+        monEl.onmouseout  = () => { monEl.style.borderColor='var(--color-border-tertiary)'; monEl.style.background='var(--color-background-secondary)'; };
+        monEl.onclick = async () => {
+          if (!confirm('Draft '+mon.name+' ('+mon.cost+' pts)?')) return;
+          const nextPick = overallPick + 1;
+          const isDone = nextPick > n * HUB_ROSTER_SIZE;
+          await getSB().from('draft_picks').insert({ season:HUB_SEASON, pick_number:overallPick, round, pick_in_round:pi+1, coach_username:hubState.user.username, pokemon_name:mon.name, cost:mon.cost });
+          await getSB().from('rosters').insert({ season:HUB_SEASON, coach_username:hubState.user.username, pokemon_name:mon.name, cost:mon.cost, acquired_via:'draft' });
+          await getSB().from('draft_config').update({ current_pick:nextPick, status:isDone?'complete':'active', updated_at:new Date().toISOString() }).eq('id', draft.id);
+          await hubAudit('DRAFT_PICK', { pick:overallPick, pokemon:mon.name, cost:mon.cost });
+          hubToast('✅ Drafted '+mon.name+'!', 'success');
+          await hubLoadAll(); render(dashState);
+        };
+      }
+      poolGrid.appendChild(monEl);
+    });
+  }
+
+  filterInput.oninput = (e) => buildPoolGrid(e.target.value);
+  buildPoolGrid();
+
+  wrap.appendChild(statusRow);
+  wrap.appendChild(queueRow);
+  wrap.appendChild(filterInput);
+  wrap.appendChild(poolGrid);
+  return wrap;
+}
+
+function hubPicksTable() {
+  const wrap = el('div', { style:{ background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-lg)', overflow:'hidden' } });
+  const table = el('table', { style:{ width:'100%', borderCollapse:'collapse' } });
+  const thead = el('thead', {});
+  const hr = el('tr', { style:{ background:'var(--color-background-tertiary)' } });
+  ['#','Round','Coach','Pokémon','Cost'].forEach(h => {
+    const th = el('th', { style:{ padding:'10px 12px', fontSize:'11px', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.6px', color:'var(--color-text-tertiary)', textAlign:'left', borderBottom:'0.5px solid var(--color-border-tertiary)' } }, h);
+    hr.appendChild(th);
+  });
+  thead.appendChild(hr); table.appendChild(thead);
+  const tbody = el('tbody', {});
+  hubState.picks.forEach(p => {
+    const color = COACH_COLORS[p.coach_username] || '#888';
+    const tr = el('tr', { style:{ borderBottom:'0.5px solid var(--color-border-tertiary)' } });
+    [String(p.pick_number), String(p.round), p.coach_username, p.pokemon_name].forEach((v,i) => {
+      const td = el('td', { style:{ padding:'10px 12px', fontSize:'13px' } });
+      if (i===2) { const dot=el('span',{style:{display:'inline-block',width:'8px',height:'8px',borderRadius:'50%',background:color,marginRight:'6px'}}); td.appendChild(dot); td.appendChild(document.createTextNode(v)); }
+      else td.textContent=v;
+      tr.appendChild(td);
+    });
+    const tdCost = el('td', { style:{ padding:'10px 12px' } }); tdCost.appendChild(hubCostPill(p.cost)); tr.appendChild(tdCost);
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody); wrap.appendChild(table);
+  return wrap;
+}
+
+function hubDraftAdminPanel(dashState) {
+  const draft = hubState.draft;
+  const coaches = hubState.coaches;
+  const currentOrder = draft?.snake_order?.length ? draft.snake_order : coaches.map(c=>c.username);
+
+  const orderInput = el('input', {
+    value: currentOrder.join(', '),
+    placeholder: 'zion, abbey, evan, … (12 comma-separated usernames)',
+    style:{ width:'100%', padding:'9px 12px', background:'var(--color-background-tertiary)', border:'0.5px solid var(--color-border-secondary)', borderRadius:'var(--border-radius-md)', color:'var(--color-text-primary)', fontFamily:'var(--font-body)', fontSize:'13px', outline:'none', marginBottom:'10px' }
+  });
+
+  const panel = el('div', { style:{ background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-lg)', padding:'20px', marginTop:'16px' } }, [
+    el('div', { style:{ fontFamily:'var(--font-display)', fontSize:'18px', letterSpacing:'0.03em', color:'var(--color-text-primary)', marginBottom:'16px' } }, '⚙ Draft Controls'),
+    el('div', { style:{ fontSize:'11px', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.6px', color:'var(--color-text-tertiary)', marginBottom:'6px' } }, 'Draft order (comma-separated)'),
+    orderInput,
+    el('div', { style:{ display:'flex', gap:'8px', flexWrap:'wrap' } }, [
+      el('button', {
+        onclick: async () => {
+          const order = orderInput.value.split(',').map(s=>s.trim().toLowerCase()).filter(s=>s);
+          if (order.length!==12) { hubToast('Need exactly 12 coaches.','error'); return; }
+          await getSB().from('draft_config').update({ snake_order:order, updated_at:new Date().toISOString() }).eq('season', HUB_SEASON);
+          hubToast('Order saved.','success');
+          await hubLoadAll(); render(dashState);
+        },
+        style:{ padding:'8px 16px', background:'var(--color-background-tertiary)', border:'0.5px solid var(--color-border-secondary)', borderRadius:'var(--border-radius-md)', cursor:'pointer', fontSize:'13px', fontWeight:'500', color:'var(--color-text-primary)' }
+      }, 'Save Order'),
+      el('button', {
+        onclick: async () => {
+          if (!confirm('Start the draft now?')) return;
+          await getSB().from('draft_config').update({ status:'active', current_pick:1, updated_at:new Date().toISOString() }).eq('season', HUB_SEASON);
+          await hubAudit('DRAFT_STARTED', { season:HUB_SEASON });
+          hubToast('🚀 Draft started!','success');
+          await hubLoadAll(); render(dashState);
+        },
+        style:{ padding:'8px 16px', background:'#f0c040', border:'none', borderRadius:'var(--border-radius-md)', cursor:'pointer', fontSize:'13px', fontWeight:'700', color:'#000' }
+      }, '🚀 Start Draft'),
+      el('button', {
+        onclick: async () => {
+          if (!confirm('Reset ALL picks? Cannot be undone.')) return;
+          const sb = getSB();
+          await sb.from('draft_picks').delete().eq('season', HUB_SEASON);
+          await sb.from('rosters').delete().eq('season', HUB_SEASON).eq('acquired_via','draft');
+          await sb.from('draft_config').update({ status:'pre', current_pick:1, updated_at:new Date().toISOString() }).eq('season', HUB_SEASON);
+          await hubAudit('DRAFT_RESET', { season:HUB_SEASON });
+          hubToast('Draft reset.','info');
+          await hubLoadAll(); render(dashState);
+        },
+        style:{ padding:'8px 16px', background:'var(--color-background-tertiary)', border:'0.5px solid #f87171', borderRadius:'var(--border-radius-md)', cursor:'pointer', fontSize:'13px', fontWeight:'500', color:'#f87171' }
+      }, '↺ Reset Draft')
+    ])
+  ]);
+  return panel;
+}
+
+// ── Trades ────────────────────────────────────────────────
+function hubViewTrades(dashState) {
+  const wrap = el('div', {});
+
+  const proposeBtn = el('button', {
+    onclick: () => hubShowTradeModal(dashState, null),
+    style:{ padding:'8px 16px', background:'#f0c040', border:'none', borderRadius:'var(--border-radius-md)', cursor:'pointer', fontSize:'13px', fontWeight:'700', color:'#000', marginBottom:'1.25rem' }
+  }, '📤 Propose Trade');
+
+  wrap.appendChild(el('div', { style:{ display:'flex', justifyContent:'flex-end', marginBottom:'1.25rem' } }, proposeBtn));
+
+  // Pending for me
+  const pendingForMe = hubState.trades.filter(t => t.receiver===hubState.user.username && t.status==='pending');
+  if (pendingForMe.length) {
+    const sect = el('div', { style:{ background:'var(--color-background-secondary)', border:'0.5px solid #fbbf24', borderRadius:'var(--border-radius-lg)', padding:'20px', marginBottom:'1rem' } }, [
+      el('div', { style:{ fontFamily:'var(--font-display)', fontSize:'18px', letterSpacing:'0.03em', color:'var(--color-text-primary)', marginBottom:'12px' } }, '📬 Awaiting Your Response')
+    ]);
+    pendingForMe.forEach(t => sect.appendChild(hubTradeCard(t, dashState)));
+    wrap.appendChild(sect);
+  }
+
+  // Commissioner approval queue
+  if (hubState.user?.is_commissioner) {
+    const pendingApproval = hubState.trades.filter(t => t.status==='accepted');
+    if (pendingApproval.length) {
+      const sect = el('div', { style:{ background:'var(--color-background-secondary)', border:'0.5px solid #f0c040', borderRadius:'var(--border-radius-lg)', padding:'20px', marginBottom:'1rem' } }, [
+        el('div', { style:{ fontFamily:'var(--font-display)', fontSize:'18px', letterSpacing:'0.03em', color:'var(--color-text-primary)', marginBottom:'12px' } }, '👑 Awaiting Approval')
+      ]);
+      pendingApproval.forEach(t => sect.appendChild(hubTradeCard(t, dashState)));
+      wrap.appendChild(sect);
+    }
+  }
+
+  // All trades table
+  const allSection = el('div', { style:{ background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-lg)', padding:'20px' } }, [
+    el('div', { style:{ fontFamily:'var(--font-display)', fontSize:'18px', letterSpacing:'0.03em', color:'var(--color-text-primary)', marginBottom:'12px' } }, 'All Trades')
+  ]);
+
+  if (!hubState.trades.length) {
+    allSection.appendChild(el('div', { style:{ textAlign:'center', padding:'32px', color:'var(--color-text-tertiary)' } }, 'No trades yet'));
+  } else {
+    hubState.trades.forEach(t => allSection.appendChild(hubTradeCard(t, dashState)));
+  }
+  wrap.appendChild(allSection);
+  return wrap;
+}
+
+function hubTradeCard(t, dashState) {
+  const isReceiver = t.receiver === hubState.user.username;
+  const isCommish = hubState.user?.is_commissioner;
+
+  const card = el('div', { style:{ border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-md)', padding:'14px', marginBottom:'10px' } }, [
+    el('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'10px' } }, [
+      el('div', { style:{ fontSize:'13px' } }, [
+        el('strong', {}, t.proposer), el('span', { style:{ color:'var(--color-text-tertiary)' } }, ' → '), el('strong', {}, t.receiver)
+      ]),
+      hubBadge(t.status)
+    ]),
+    el('div', { style:{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px', marginBottom:'10px' } }, [
+      el('div', {}, [
+        el('div', { style:{ fontSize:'10px', color:'var(--color-text-tertiary)', marginBottom:'4px', textTransform:'uppercase', letterSpacing:'0.5px', fontWeight:'600' } }, t.proposer+' gives'),
+        ...t.offered_pokemon.map(p => el('div', { style:{ fontSize:'13px', fontWeight:'500' } }, '• '+p))
+      ]),
+      el('div', {}, [
+        el('div', { style:{ fontSize:'10px', color:'var(--color-text-tertiary)', marginBottom:'4px', textTransform:'uppercase', letterSpacing:'0.5px', fontWeight:'600' } }, t.receiver+' gives'),
+        ...t.requested_pokemon.map(p => el('div', { style:{ fontSize:'13px', fontWeight:'500' } }, '• '+p))
+      ])
+    ]),
+    t.proposer_note ? el('div', { style:{ fontSize:'12px', color:'var(--color-text-tertiary)', marginBottom:'10px', fontStyle:'italic' } }, '"'+t.proposer_note+'"') : null,
+    el('div', { style:{ display:'flex', gap:'8px' } }, [
+      isReceiver && t.status==='pending' ? el('button', {
+        onclick: async () => {
+          await getSB().from('trades').update({ status:'accepted', responded_at:new Date().toISOString() }).eq('id',t.id);
+          await hubAudit('TRADE_ACCEPTED', { trade_id:t.id });
+          hubToast('Trade accepted — awaiting commissioner.','success');
+          await hubLoadAll(); render(dashState);
+        },
+        style:{ padding:'5px 12px', background:'rgba(52,211,153,0.2)', color:'#34d399', border:'0.5px solid #34d399', borderRadius:'var(--border-radius-md)', cursor:'pointer', fontSize:'12px', fontWeight:'600' }
+      }, '✅ Accept') : null,
+      isReceiver && t.status==='pending' ? el('button', {
+        onclick: async () => {
+          await getSB().from('trades').update({ status:'declined', responded_at:new Date().toISOString() }).eq('id',t.id);
+          await hubAudit('TRADE_DECLINED', { trade_id:t.id });
+          hubToast('Trade declined.','info');
+          await hubLoadAll(); render(dashState);
+        },
+        style:{ padding:'5px 12px', background:'rgba(248,113,113,0.2)', color:'#f87171', border:'0.5px solid #f87171', borderRadius:'var(--border-radius-md)', cursor:'pointer', fontSize:'12px', fontWeight:'600' }
+      }, '❌ Decline') : null,
+      isCommish && t.status==='accepted' ? el('button', {
+        onclick: async () => {
+          const sb = getSB();
+          await sb.from('trades').update({ status:'approved', resolved_at:new Date().toISOString() }).eq('id',t.id);
+          for (const mon of t.offered_pokemon) {
+            const cost = (hubState.rosters[t.proposer]||[]).find(r=>r.pokemon_name===mon)?.cost||0;
+            await sb.from('rosters').delete().eq('season',HUB_SEASON).eq('coach_username',t.proposer).eq('pokemon_name',mon);
+            await sb.from('rosters').insert({ season:HUB_SEASON, coach_username:t.receiver, pokemon_name:mon, cost, acquired_via:'trade' });
+          }
+          for (const mon of t.requested_pokemon) {
+            const cost = (hubState.rosters[t.receiver]||[]).find(r=>r.pokemon_name===mon)?.cost||0;
+            await sb.from('rosters').delete().eq('season',HUB_SEASON).eq('coach_username',t.receiver).eq('pokemon_name',mon);
+            await sb.from('rosters').insert({ season:HUB_SEASON, coach_username:t.proposer, pokemon_name:mon, cost, acquired_via:'trade' });
+          }
+          await hubAudit('TRADE_APPROVED', { trade_id:t.id });
+          hubToast('✅ Trade approved!','success');
+          await hubLoadAll(); render(dashState);
+        },
+        style:{ padding:'5px 12px', background:'rgba(240,192,64,0.2)', color:'#f0c040', border:'0.5px solid #f0c040', borderRadius:'var(--border-radius-md)', cursor:'pointer', fontSize:'12px', fontWeight:'600' }
+      }, '👑 Approve') : null,
+      isCommish && t.status==='accepted' ? el('button', {
+        onclick: async () => {
+          await getSB().from('trades').update({ status:'vetoed', resolved_at:new Date().toISOString() }).eq('id',t.id);
+          await hubAudit('TRADE_VETOED', { trade_id:t.id });
+          hubToast('Trade vetoed.','info');
+          await hubLoadAll(); render(dashState);
+        },
+        style:{ padding:'5px 12px', background:'rgba(248,113,113,0.15)', color:'#f87171', border:'0.5px solid #f87171', borderRadius:'var(--border-radius-md)', cursor:'pointer', fontSize:'12px', fontWeight:'600' }
+      }, '🚫 Veto') : null,
+      t.proposer===hubState.user.username && t.status==='pending' ? el('button', {
+        onclick: async () => {
+          await getSB().from('trades').update({ status:'cancelled' }).eq('id',t.id);
+          hubToast('Cancelled.','info');
+          await hubLoadAll(); render(dashState);
+        },
+        style:{ padding:'5px 12px', background:'var(--color-background-tertiary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-md)', cursor:'pointer', fontSize:'12px', color:'var(--color-text-secondary)' }
+      }, 'Cancel') : null,
+    ].filter(x=>x))
+  ].filter(x=>x));
+  return card;
+}
+
+function hubShowTradeModal(dashState, targetUsername) {
+  const myRoster = hubState.rosters[hubState.user.username] || [];
+  if (!myRoster.length) { hubToast('You have no Pokémon to trade.','error'); return; }
+
+  const others = hubState.coaches.filter(c=>c.username!==hubState.user.username);
+  const receiverSel = el('select', { style:{ width:'100%', padding:'9px 12px', background:'var(--color-background-tertiary)', border:'0.5px solid var(--color-border-secondary)', borderRadius:'var(--border-radius-md)', color:'var(--color-text-primary)', fontFamily:'var(--font-body)', fontSize:'13px', outline:'none' } });
+  others.forEach(c => {
+    const o = el('option', { value:c.username }, c.display_name);
+    if (c.username===targetUsername) o.selected=true;
+    receiverSel.appendChild(o);
+  });
+
+  const offerList = el('div', {});
+  myRoster.forEach(r => {
+    offerList.appendChild(el('label', { style:{ display:'flex', alignItems:'center', gap:'8px', padding:'5px 0', cursor:'pointer', fontSize:'13px' } }, [
+      el('input', { type:'checkbox', value:r.pokemon_name, style:{ accentColor:'#f0c040' } }),
+      hubCostPill(r.cost), document.createTextNode(' '+r.pokemon_name)
+    ]));
+  });
+
+  const requestList = el('div', {});
+  function buildRequestList(username) {
+    requestList.innerHTML='';
+    (hubState.rosters[username]||[]).forEach(r => {
+      requestList.appendChild(el('label', { style:{ display:'flex', alignItems:'center', gap:'8px', padding:'5px 0', cursor:'pointer', fontSize:'13px' } }, [
+        el('input', { type:'checkbox', value:r.pokemon_name, style:{ accentColor:'#f0c040' } }),
+        hubCostPill(r.cost), document.createTextNode(' '+r.pokemon_name)
+      ]));
+    });
+    if (!requestList.children.length) requestList.appendChild(el('div', { style:{ color:'var(--color-text-tertiary)', fontSize:'12px' } }, 'No Pokémon yet'));
+  }
+  buildRequestList(targetUsername || others[0]?.username);
+  receiverSel.onchange = (e) => buildRequestList(e.target.value);
+
+  const noteInput = el('textarea', { placeholder:'Add a message… (optional)', style:{ width:'100%', padding:'9px 12px', background:'var(--color-background-tertiary)', border:'0.5px solid var(--color-border-secondary)', borderRadius:'var(--border-radius-md)', color:'var(--color-text-primary)', fontFamily:'var(--font-body)', fontSize:'13px', resize:'vertical', minHeight:'70px', outline:'none' } });
+  const errMsg = el('div', { style:{ fontSize:'12px', color:'#f87171', minHeight:'16px' } });
+
+  const backdrop = el('div', { style:{ position:'fixed', inset:'0', background:'rgba(0,0,0,0.6)', zIndex:'500', display:'flex', alignItems:'center', justifyContent:'center' } });
+  const box = el('div', { style:{ width:'520px', maxHeight:'85vh', overflowY:'auto', background:'var(--color-background-primary)', border:'0.5px solid var(--color-border-secondary)', borderRadius:'16px', padding:'32px' } }, [
+    el('div', { style:{ fontFamily:'var(--font-display)', fontSize:'24px', letterSpacing:'0.03em', marginBottom:'20px' } }, 'Propose Trade'),
+    el('div', { style:{ fontSize:'11px', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.6px', color:'var(--color-text-tertiary)', marginBottom:'6px' } }, 'Trade with'),
+    el('div', { style:{ marginBottom:'16px' } }, receiverSel),
+    el('div', { style:{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px', marginBottom:'16px' } }, [
+      el('div', {}, [el('div', { style:{ fontSize:'11px', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.6px', color:'var(--color-text-tertiary)', marginBottom:'8px' } }, 'You give'), offerList]),
+      el('div', {}, [el('div', { style:{ fontSize:'11px', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.6px', color:'var(--color-text-tertiary)', marginBottom:'8px' } }, 'You receive'), requestList]),
+    ]),
+    el('div', { style:{ fontSize:'11px', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.6px', color:'var(--color-text-tertiary)', marginBottom:'6px' } }, 'Note'),
+    el('div', { style:{ marginBottom:'8px' } }, noteInput),
+    errMsg,
+    el('div', { style:{ display:'flex', gap:'8px', marginTop:'4px' } }, [
+      el('button', {
+        onclick: async () => {
+          const receiver = receiverSel.value;
+          const offered = [...offerList.querySelectorAll('input:checked')].map(cb=>cb.value);
+          const requested = [...requestList.querySelectorAll('input:checked')].map(cb=>cb.value);
+          if (!offered.length||!requested.length) { errMsg.textContent='Select at least one Pokémon on each side.'; return; }
+          const { error } = await getSB().from('trades').insert({ season:HUB_SEASON, proposer:hubState.user.username, receiver, offered_pokemon:offered, requested_pokemon:requested, proposer_note:noteInput.value.trim()||null });
+          if (error) { errMsg.textContent='Error: '+error.message; return; }
+          await hubAudit('TRADE_PROPOSED', { receiver, offered, requested });
+          backdrop.remove();
+          hubToast('Trade proposal sent!','success');
+          await hubLoadAll(); render(dashState);
+        },
+        style:{ padding:'9px 18px', background:'#f0c040', border:'none', borderRadius:'var(--border-radius-md)', cursor:'pointer', fontSize:'13px', fontWeight:'700', color:'#000' }
+      }, 'Send Proposal'),
+      el('button', { onclick:()=>backdrop.remove(), style:{ padding:'9px 18px', background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-md)', cursor:'pointer', fontSize:'13px', color:'var(--color-text-secondary)' } }, 'Cancel')
+    ])
+  ]);
+  backdrop.appendChild(box);
+  document.body.appendChild(backdrop);
+}
+
+// ── Waivers ───────────────────────────────────────────────
+function hubViewWaivers(dashState) {
+  const wrap = el('div', {});
+  const myRoster = hubState.rosters[hubState.user.username] || [];
+  const takenNames = new Set(Object.values(hubState.rosters).flat().map(r=>r.pokemon_name));
+
+  const claimBtn = el('button', {
+    onclick: () => hubShowWaiverModal(dashState),
+    style:{ padding:'8px 16px', background:'#f0c040', border:'none', borderRadius:'var(--border-radius-md)', cursor:'pointer', fontSize:'13px', fontWeight:'700', color:'#000', marginBottom:'1.25rem' }
+  }, '📋 Submit Claim');
+  wrap.appendChild(el('div', { style:{ display:'flex', justifyContent:'flex-end', marginBottom:'1.25rem' } }, claimBtn));
+
+  if (hubState.user?.is_commissioner) {
+    const pending = hubState.waivers.filter(w=>w.status==='pending');
+    if (pending.length) {
+      const sect = el('div', { style:{ background:'var(--color-background-secondary)', border:'0.5px solid #f0c040', borderRadius:'var(--border-radius-lg)', padding:'20px', marginBottom:'1rem' } }, [
+        el('div', { style:{ fontFamily:'var(--font-display)', fontSize:'18px', letterSpacing:'0.03em', color:'var(--color-text-primary)', marginBottom:'12px' } }, '👑 Pending Claims')
+      ]);
+      pending.forEach(w => {
+        const row = el('div', { style:{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'10px 0', borderBottom:'0.5px solid var(--color-border-tertiary)', gap:'12px', flexWrap:'wrap' } }, [
+          el('div', {}, [
+            el('span', { style:{ fontWeight:'600' } }, w.coach_username),
+            el('span', { style:{ color:'var(--color-text-tertiary)' } }, ' wants '),
+            el('strong', {}, w.pokemon_desired),
+            w.pokemon_to_drop ? el('span', { style:{ color:'var(--color-text-tertiary)' } }, ' · drops '+w.pokemon_to_drop) : null,
+            el('div', { style:{ fontSize:'11px', color:'var(--color-text-tertiary)', marginTop:'2px' } }, new Date(w.claimed_at).toLocaleString())
+          ].filter(x=>x)),
+          el('div', { style:{ display:'flex', gap:'8px' } }, [
+            el('button', {
+              onclick: async () => {
+                const mon = hubState.pool.find(m=>m.name===w.pokemon_desired);
+                await getSB().from('rosters').insert({ season:HUB_SEASON, coach_username:w.coach_username, pokemon_name:w.pokemon_desired, cost:mon?.cost||0, acquired_via:'waiver' });
+                if (w.pokemon_to_drop) await getSB().from('rosters').delete().eq('season',HUB_SEASON).eq('coach_username',w.coach_username).eq('pokemon_name',w.pokemon_to_drop);
+                await getSB().from('waiver_claims').update({ status:'approved', resolved_at:new Date().toISOString() }).eq('id',w.id);
+                await hubAudit('WAIVER_APPROVED', { waiver_id:w.id });
+                hubToast('Waiver approved!','success');
+                await hubLoadAll(); render(dashState);
+              },
+              style:{ padding:'5px 12px', background:'rgba(52,211,153,0.2)', color:'#34d399', border:'0.5px solid #34d399', borderRadius:'var(--border-radius-md)', cursor:'pointer', fontSize:'12px', fontWeight:'600' }
+            }, '✅ Approve'),
+            el('button', {
+              onclick: async () => {
+                await getSB().from('waiver_claims').update({ status:'denied', resolved_at:new Date().toISOString() }).eq('id',w.id);
+                await hubAudit('WAIVER_DENIED', { waiver_id:w.id });
+                hubToast('Waiver denied.','info');
+                await hubLoadAll(); render(dashState);
+              },
+              style:{ padding:'5px 12px', background:'rgba(248,113,113,0.15)', color:'#f87171', border:'0.5px solid #f87171', borderRadius:'var(--border-radius-md)', cursor:'pointer', fontSize:'12px', fontWeight:'600' }
+            }, '❌ Deny')
+          ])
+        ]);
+        sect.appendChild(row);
+      });
+      wrap.appendChild(sect);
+    }
+  }
+
+  // History table
+  const histSect = el('div', { style:{ background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-lg)', padding:'20px' } }, [
+    el('div', { style:{ fontFamily:'var(--font-display)', fontSize:'18px', letterSpacing:'0.03em', color:'var(--color-text-primary)', marginBottom:'12px' } }, 'Waiver History')
+  ]);
+  if (!hubState.waivers.length) {
+    histSect.appendChild(el('div', { style:{ textAlign:'center', padding:'32px', color:'var(--color-text-tertiary)' } }, 'No waiver claims yet'));
+  } else {
+    hubState.waivers.forEach(w => {
+      histSect.appendChild(el('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 0', borderBottom:'0.5px solid var(--color-border-tertiary)', flexWrap:'wrap', gap:'8px' } }, [
+        el('div', {}, [
+          el('span', { style:{ fontWeight:'600', fontSize:'13px' } }, w.coach_username),
+          el('span', { style:{ color:'var(--color-text-tertiary)', fontSize:'13px' } }, ' → '+w.pokemon_desired+(w.pokemon_to_drop?' (drops '+w.pokemon_to_drop+')':''))
+        ]),
+        el('div', { style:{ display:'flex', gap:'8px', alignItems:'center' } }, [
+          hubBadge(w.status==='approved'?'approved':w.status==='denied'?'declined':'pending'),
+          el('span', { style:{ fontSize:'11px', color:'var(--color-text-tertiary)' } }, new Date(w.claimed_at).toLocaleDateString())
+        ])
+      ]));
+    });
+  }
+  wrap.appendChild(histSect);
+  return wrap;
+}
+
+function hubShowWaiverModal(dashState) {
+  const takenNames = new Set(Object.values(hubState.rosters).flat().map(r=>r.pokemon_name));
+  const available = hubState.pool.filter(m=>m.is_available && !takenNames.has(m.name));
+  const myRoster = hubState.rosters[hubState.user.username] || [];
+
+  const wantSel = el('select', { style:{ width:'100%', padding:'9px 12px', background:'var(--color-background-tertiary)', border:'0.5px solid var(--color-border-secondary)', borderRadius:'var(--border-radius-md)', color:'var(--color-text-primary)', fontFamily:'var(--font-body)', fontSize:'13px', outline:'none', marginBottom:'12px' } });
+  el('option',{value:''},'Select…').selected=true; wantSel.appendChild(el('option',{value:''},'Select…'));
+  available.forEach(m => wantSel.appendChild(el('option',{value:m.name},m.name+' ('+m.cost+' pts)')));
+
+  const dropSel = el('select', { style:{ width:'100%', padding:'9px 12px', background:'var(--color-background-tertiary)', border:'0.5px solid var(--color-border-secondary)', borderRadius:'var(--border-radius-md)', color:'var(--color-text-primary)', fontFamily:'var(--font-body)', fontSize:'13px', outline:'none' } });
+  dropSel.appendChild(el('option',{value:''},'— Keep all —'));
+  myRoster.forEach(r => dropSel.appendChild(el('option',{value:r.pokemon_name},r.pokemon_name)));
+
+  const backdrop = el('div', { style:{ position:'fixed', inset:'0', background:'rgba(0,0,0,0.6)', zIndex:'500', display:'flex', alignItems:'center', justifyContent:'center' } });
+  const box = el('div', { style:{ width:'420px', background:'var(--color-background-primary)', border:'0.5px solid var(--color-border-secondary)', borderRadius:'16px', padding:'32px' } }, [
+    el('div', { style:{ fontFamily:'var(--font-display)', fontSize:'24px', letterSpacing:'0.03em', marginBottom:'20px' } }, 'Waiver Claim'),
+    el('div', { style:{ fontSize:'11px', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.6px', color:'var(--color-text-tertiary)', marginBottom:'6px' } }, 'Pokémon you want'),
+    wantSel,
+    el('div', { style:{ fontSize:'11px', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.6px', color:'var(--color-text-tertiary)', marginBottom:'6px' } }, 'Pokémon to drop (optional)'),
+    el('div', { style:{ marginBottom:'16px' } }, dropSel),
+    el('div', { style:{ display:'flex', gap:'8px' } }, [
+      el('button', {
+        onclick: async () => {
+          const want = wantSel.value; const drop = dropSel.value;
+          if (!want) { hubToast('Select a Pokémon.','error'); return; }
+          const { error } = await getSB().from('waiver_claims').insert({ season:HUB_SEASON, coach_username:hubState.user.username, pokemon_desired:want, pokemon_to_drop:drop||null });
+          if (error) { hubToast('Error: '+error.message,'error'); return; }
+          await hubAudit('WAIVER_CLAIMED', { want, drop:drop||null });
+          backdrop.remove();
+          hubToast('Waiver submitted!','success');
+          await hubLoadAll(); render(dashState);
+        },
+        style:{ padding:'9px 18px', background:'#f0c040', border:'none', borderRadius:'var(--border-radius-md)', cursor:'pointer', fontSize:'13px', fontWeight:'700', color:'#000' }
+      }, 'Submit'),
+      el('button', { onclick:()=>backdrop.remove(), style:{ padding:'9px 18px', background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-md)', cursor:'pointer', fontSize:'13px', color:'var(--color-text-secondary)' } }, 'Cancel')
+    ])
+  ]);
+  backdrop.appendChild(box); document.body.appendChild(backdrop);
+}
+
+// ── Pool ──────────────────────────────────────────────────
+function hubViewPool(dashState) {
+  const takenNames = new Set(Object.values(hubState.rosters).flat().map(r=>r.pokemon_name));
+  const wrap = el('div', {});
+
+  const topRow = el('div', { style:{ display:'flex', gap:'12px', alignItems:'center', marginBottom:'1.25rem', flexWrap:'wrap' } });
+  const filterInput = el('input', { placeholder:'🔍 Search…', style:{ padding:'8px 12px', background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-secondary)', borderRadius:'var(--border-radius-md)', color:'var(--color-text-primary)', fontFamily:'var(--font-body)', fontSize:'13px', outline:'none', flex:'1', minWidth:'160px' } });
+  topRow.appendChild(filterInput);
+
+  if (hubState.user?.is_commissioner) {
+    const addForm = el('div', { style:{ display:'flex', gap:'8px', alignItems:'center', flexWrap:'wrap' } }, [
+      el('input', { id:'hub-new-mon', placeholder:'Pokémon name', style:{ padding:'8px 12px', background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-secondary)', borderRadius:'var(--border-radius-md)', color:'var(--color-text-primary)', fontFamily:'var(--font-body)', fontSize:'13px', outline:'none', width:'180px' } }),
+      el('input', { id:'hub-new-cost', type:'number', min:'0', max:'20', placeholder:'Cost', style:{ padding:'8px 12px', background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-secondary)', borderRadius:'var(--border-radius-md)', color:'var(--color-text-primary)', fontFamily:'var(--font-body)', fontSize:'13px', outline:'none', width:'80px' } }),
+      el('button', {
+        onclick: async () => {
+          const name = document.getElementById('hub-new-mon').value.trim();
+          const cost = parseInt(document.getElementById('hub-new-cost').value);
+          if (!name||isNaN(cost)) { hubToast('Enter name and cost.','error'); return; }
+          const { error } = await getSB().from('pokemon_pool').insert({ name, cost });
+          if (error) { hubToast('Error: '+error.message,'error'); return; }
+          await hubAudit('POOL_ADD', { name, cost });
+          hubToast(name+' added.','success');
+          await hubLoadAll(); render(dashState);
+        },
+        style:{ padding:'8px 14px', background:'#f0c040', border:'none', borderRadius:'var(--border-radius-md)', cursor:'pointer', fontSize:'13px', fontWeight:'700', color:'#000' }
+      }, '+ Add')
+    ]);
+    topRow.appendChild(addForm);
+  }
+  wrap.appendChild(topRow);
+
+  const grid = el('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))', gap:'8px' } });
+
+  function buildGrid(filter='') {
+    grid.innerHTML='';
+    hubState.pool.filter(m=>!filter||m.name.toLowerCase().includes(filter.toLowerCase())).forEach(mon => {
+      const taken = takenNames.has(mon.name);
+      const owner = taken ? Object.entries(hubState.rosters).find(([u,mons])=>mons.some(r=>r.pokemon_name===mon.name)) : null;
+      const ownerColor = owner ? COACH_COLORS[owner[0]]||'#888' : null;
+
+      const item = el('div', {
+        style:{
+          display:'flex', alignItems:'center', gap:'8px', padding:'10px 12px',
+          background: taken?'var(--color-background-tertiary)':'var(--color-background-secondary)',
+          border:'0.5px solid var(--color-border-tertiary)',
+          borderRadius:'var(--border-radius-md)',
+          opacity: !mon.is_available ? '0.4' : '1'
+        }
+      }, [
+        hubCostPill(mon.cost),
+        el('div', { style:{ flex:'1', minWidth:'0' } }, [
+          el('div', { style:{ fontSize:'13px', fontWeight:'500', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' } }, mon.name),
+          taken ? el('div', { style:{ fontSize:'10px', color:ownerColor } }, '→ '+owner[0]) :
+          !mon.is_available ? el('div', { style:{ fontSize:'10px', color:'var(--color-text-tertiary)' } }, 'hidden') :
+          el('div', { style:{ fontSize:'10px', color:'#34d399' } }, 'available')
+        ]),
+        hubState.user?.is_commissioner ? el('button', {
+          onclick: async () => {
+            const newCost = prompt('Edit cost for '+mon.name+' (current '+mon.cost+'):', mon.cost);
+            if (newCost===null) return;
+            await getSB().from('pokemon_pool').update({ cost:parseInt(newCost)||mon.cost, is_available:!mon.is_available===confirm('Toggle visibility for '+mon.name+'?') ? !mon.is_available : mon.is_available }).eq('id',mon.id);
+            await hubAudit('POOL_EDIT', { name:mon.name, newCost });
+            hubToast('Updated.','success');
+            await hubLoadAll(); render(dashState);
+          },
+          style:{ padding:'2px 7px', background:'var(--color-background-tertiary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-sm)', cursor:'pointer', fontSize:'11px', color:'var(--color-text-tertiary)', flexShrink:'0' }
+        }, '✏') : null
+      ].filter(x=>x));
+      grid.appendChild(item);
+    });
+  }
+
+  filterInput.oninput = (e) => buildGrid(e.target.value);
+  buildGrid();
+  wrap.appendChild(grid);
+  return wrap;
+}
+
+// ── Admin ─────────────────────────────────────────────────
+function hubViewAdmin(dashState) {
+  if (!hubState.user?.is_commissioner) return el('div', { style:{ color:'var(--color-text-tertiary)' } }, 'Access denied.');
+  const wrap = el('div', {});
+
+  // Set password
+  const pwCoachSel = el('select', { style:{ padding:'8px 10px', background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-secondary)', borderRadius:'var(--border-radius-md)', color:'var(--color-text-primary)', fontFamily:'var(--font-body)', fontSize:'13px', outline:'none' } });
+  hubState.coaches.forEach(c => pwCoachSel.appendChild(el('option',{value:c.username},c.display_name)));
+  const pwInput = el('input', { type:'text', placeholder:'New password', style:{ padding:'8px 12px', background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-secondary)', borderRadius:'var(--border-radius-md)', color:'var(--color-text-primary)', fontFamily:'var(--font-body)', fontSize:'13px', outline:'none', flex:'1' } });
+
+  const grid = el('div', { style:{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px' } });
+
+  const pwCard = el('div', { style:{ background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-lg)', padding:'20px' } }, [
+    el('div', { style:{ fontFamily:'var(--font-display)', fontSize:'18px', letterSpacing:'0.03em', marginBottom:'14px' } }, 'Set Coach Password'),
+    el('div', { style:{ display:'flex', gap:'8px', flexWrap:'wrap', marginBottom:'10px' } }, [pwCoachSel, pwInput]),
+    el('button', {
+      onclick: async () => {
+        const u = pwCoachSel.value; const p = pwInput.value.trim();
+        if (!p) { hubToast('Enter a password.','error'); return; }
+        await getSB().from('coaches').update({ password_hash:p }).eq('username',u);
+        await hubAudit('PASSWORD_SET', { for:u });
+        hubToast('Password set for '+u+'.','success');
+        pwInput.value='';
+      },
+      style:{ padding:'8px 16px', background:'#f0c040', border:'none', borderRadius:'var(--border-radius-md)', cursor:'pointer', fontSize:'13px', fontWeight:'700', color:'#000' }
+    }, 'Set Password')
+  ]);
+
+  // Remove from roster
+  const rmCoachSel = el('select', { style:{ padding:'8px 10px', background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-secondary)', borderRadius:'var(--border-radius-md)', color:'var(--color-text-primary)', fontFamily:'var(--font-body)', fontSize:'13px', outline:'none' } });
+  hubState.coaches.forEach(c => rmCoachSel.appendChild(el('option',{value:c.username},c.display_name)));
+  const rmMonSel = el('select', { style:{ padding:'8px 10px', background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-secondary)', borderRadius:'var(--border-radius-md)', color:'var(--color-text-primary)', fontFamily:'var(--font-body)', fontSize:'13px', outline:'none' } });
+  function updateRmMons(username) {
+    rmMonSel.innerHTML='';
+    (hubState.rosters[username]||[]).forEach(r => rmMonSel.appendChild(el('option',{value:r.pokemon_name},r.pokemon_name)));
+  }
+  updateRmMons(hubState.coaches[0]?.username);
+  rmCoachSel.onchange = (e) => updateRmMons(e.target.value);
+
+  const rmCard = el('div', { style:{ background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-lg)', padding:'20px' } }, [
+    el('div', { style:{ fontFamily:'var(--font-display)', fontSize:'18px', letterSpacing:'0.03em', marginBottom:'14px' } }, 'Roster Edit'),
+    el('div', { style:{ display:'flex', gap:'8px', marginBottom:'10px', flexWrap:'wrap' } }, [rmCoachSel, rmMonSel]),
+    el('button', {
+      onclick: async () => {
+        const u=rmCoachSel.value; const m=rmMonSel.value;
+        if (!m||!confirm('Remove '+m+' from '+u+'?')) return;
+        await getSB().from('rosters').delete().eq('season',HUB_SEASON).eq('coach_username',u).eq('pokemon_name',m);
+        await hubAudit('ADMIN_ROSTER_REMOVE', { coach:u, mon:m });
+        hubToast('Removed.','info');
+        await hubLoadAll(); render(dashState);
+      },
+      style:{ padding:'8px 16px', background:'rgba(248,113,113,0.2)', border:'0.5px solid #f87171', borderRadius:'var(--border-radius-md)', cursor:'pointer', fontSize:'13px', fontWeight:'600', color:'#f87171' }
+    }, 'Remove from Roster')
+  ]);
+
+  grid.appendChild(pwCard);
+  grid.appendChild(rmCard);
+  wrap.appendChild(grid);
+  return wrap;
+}
+
+// ── Audit Log ─────────────────────────────────────────────
+function hubViewLog(dashState) {
+  const wrap = el('div', {});
+  const loading = el('div', { style:{ padding:'32px', textAlign:'center', color:'var(--color-text-tertiary)' } }, 'Loading audit log…');
+  wrap.appendChild(loading);
+
+  getSB().from('audit_log').select('*').order('created_at', { ascending:false }).limit(100).then(({ data }) => {
+
+  const table = el('table', { style:{ width:'100%', borderCollapse:'collapse' } });
+  const thead = el('thead', {});
+  const hr = el('tr', { style:{ background:'var(--color-background-secondary)' } });
+  ['Action','By','Details','Time'].forEach(h => {
+    const th = el('th', { style:{ padding:'10px 12px', fontSize:'11px', fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.6px', color:'var(--color-text-tertiary)', textAlign:'left', borderBottom:'0.5px solid var(--color-border-tertiary)' } }, h);
+    hr.appendChild(th);
+  });
+  thead.appendChild(hr); table.appendChild(thead);
+
+  const tbody = el('tbody', {});
+  (data||[]).forEach(row => {
+    const tr = el('tr', { style:{ borderBottom:'0.5px solid var(--color-border-tertiary)' } });
+    const tdAction = el('td', { style:{ padding:'10px 12px' } });
+    tdAction.appendChild(el('code', { style:{ fontFamily:'var(--font-mono)', fontSize:'11px', color:'#f0c040', background:'rgba(240,192,64,0.1)', padding:'2px 6px', borderRadius:'4px' } }, row.action));
+    const tdBy  = el('td', { style:{ padding:'10px 12px', fontSize:'13px', fontWeight:'500' } }, row.actor||'—');
+    const tdDet = el('td', { style:{ padding:'10px 12px', fontSize:'11px', color:'var(--color-text-tertiary)', fontFamily:'var(--font-mono)' } }, JSON.stringify(row.details).slice(0,60));
+    const tdTime= el('td', { style:{ padding:'10px 12px', fontSize:'11px', color:'var(--color-text-tertiary)', whiteSpace:'nowrap' } }, new Date(row.created_at).toLocaleString());
+    [tdAction,tdBy,tdDet,tdTime].forEach(td=>tr.appendChild(td));
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+
+  const card = el('div', { style:{ background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-lg)', overflow:'hidden' } });
+    card.appendChild(table);
+    loading.replaceWith(card);
+  });
+
+  return wrap;
+}
 const BAKED_TIMESTAMP = 'April 19, 2026';
 
 const state = {
@@ -4097,6 +5199,18 @@ function render(state) {
     renderPlayoffsMode(state, root);
     return;
   }
+  if (state.view === 'hub-login') {
+    renderRegularSeasonMode(state, root);  // stats still visible
+    try { renderHubLoginModal(state, root); } catch(e) { console.error('Hub login modal error:', e); }
+    return;
+  }
+  if (state.view === 'hub') {
+    try { renderHubMode(state, root); } catch(e) {
+      console.error('Hub render error:', e);
+      root.appendChild(document.createTextNode('Hub error: ' + e.message));
+    }
+    return;
+  }
   renderRegularSeasonMode(state, root);
 }
 
@@ -4195,7 +5309,17 @@ function renderRegularSeasonMode(state, root) {
           playoffsBtn
         ].filter(x => x))
       ]),
-      el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, [searchBtn, themeBtn])
+      el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, [
+        hubState.user ? el('button', {
+          onclick: () => { hubState.view='rosters'; state.view='hub'; render(state); },
+          style: { display:'inline-flex', alignItems:'center', gap:'6px', padding:'7px 14px', fontSize:'12px', fontWeight:'700', background:'rgba(240,192,64,0.15)', color:'#f0c040', border:'0.5px solid rgba(240,192,64,0.4)', borderRadius:'var(--border-radius-md)', cursor:'pointer', transition:'all 0.15s' }
+        }, '⚡ League Hub') :
+        el('button', {
+          onclick: () => { state.view='hub-login'; render(state); },
+          style: { display:'inline-flex', alignItems:'center', gap:'6px', padding:'7px 14px', fontSize:'12px', fontWeight:'600', background:'var(--color-background-secondary)', color:'var(--color-text-secondary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-md)', cursor:'pointer', transition:'all 0.15s' }
+        }, '⚡ League Hub'),
+        searchBtn, themeBtn
+      ])
     ])
   ]);
 
