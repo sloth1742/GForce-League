@@ -3895,21 +3895,39 @@ const HUB_ADMIN_PASS = 'gforce2026';
 // ── Supabase REST client (no SDK needed) ──────────────────
 // Wraps fetch() to give a Supabase-like .from().select()... API
 function getSB() {
-  const headers = {
+  const BASE = HUB_URL + '/rest/v1/';
+  const HEADERS = {
     'apikey': HUB_KEY,
     'Authorization': 'Bearer ' + HUB_KEY,
     'Content-Type': 'application/json',
-    'Prefer': 'return=representation',
   };
 
-  function buildUrl(table, params) {
-    const url = new URL(HUB_URL + '/rest/v1/' + table);
-    if (params) Object.entries(params).forEach(([k,v]) => url.searchParams.set(k, v));
-    return url.toString();
+  async function req(method, table, params, body, single) {
+    try {
+      const url = new URL(BASE + table);
+      if (params) Object.entries(params).forEach(([k,v]) => { if(v!==undefined) url.searchParams.set(k, v); });
+      const h = { ...HEADERS };
+      if (single) h['Accept'] = 'application/vnd.pgrst.object+json';
+      if (method === 'POST' || method === 'PATCH') h['Prefer'] = 'return=representation';
+      const opts = { method, headers: h };
+      if (body) opts.body = JSON.stringify(body);
+      const res = await fetch(url.toString(), opts);
+      const text = await res.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : (single ? null : []); } catch(e) { data = single ? null : []; }
+      if (!res.ok) {
+        console.error('[HUB] Supabase error', method, table, res.status, text.slice(0,200));
+        return { data: single ? null : [], error: { message: text, status: res.status } };
+      }
+      return { data: data === null ? (single ? null : []) : data, error: null };
+    } catch(e) {
+      console.error('[HUB] fetch error', method, table, e.message);
+      return { data: single ? null : [], error: { message: e.message } };
+    }
   }
 
   function table(tableName) {
-    let _filters = {};
+    let _filters = [];
     let _order = null;
     let _limit = null;
     let _single = false;
@@ -3917,52 +3935,39 @@ function getSB() {
 
     const q = {
       select(cols) { _select = cols || '*'; return q; },
-      eq(col, val) { _filters[col] = 'eq.' + val; return q; },
+      eq(col, val) { _filters.push([col, 'eq.' + val]); return q; },
       order(col, opts) { _order = col + (opts?.ascending===false ? '.desc' : '.asc'); return q; },
       limit(n) { _limit = n; return q; },
       single() { _single = true; return q; },
 
-      async then(resolve, reject) {
-        try {
-          const params = { select: _select };
-          Object.assign(params, _filters);
-          if (_order) params.order = _order;
-          if (_limit) params.limit = _limit;
-          const h = { ...headers };
-          if (_single) h['Accept'] = 'application/vnd.pgrst.object+json';
-          const res = await fetch(buildUrl(tableName, params), { headers: h });
-          const data = res.ok ? await res.json() : null;
-          const error = res.ok ? null : { message: await res.text() };
-          resolve(_single ? { data, error } : { data: data || [], error });
-        } catch(e) { resolve({ data: null, error: { message: e.message } }); }
+      then(resolve, reject) {
+        const params = { select: _select };
+        _filters.forEach(([k,v]) => params[k] = v);
+        if (_order) params.order = _order;
+        if (_limit) params.limit = String(_limit);
+        req('GET', tableName, params, null, _single).then(resolve).catch(reject);
       },
 
-      async insert(rows) {
+      insert(rows) {
         const body = Array.isArray(rows) ? rows : [rows];
-        const res = await fetch(buildUrl(tableName), {
-          method: 'POST', headers, body: JSON.stringify(body)
-        });
-        const data = res.ok ? await res.json() : null;
-        return { data, error: res.ok ? null : { message: await res.text() } };
+        return req('POST', tableName, {}, body, false);
       },
 
       update(updates) {
-        return {
-          eq: async (col, val) => {
-            const url = buildUrl(tableName, { [col]: 'eq.' + val });
-            const res = await fetch(url, { method: 'PATCH', headers, body: JSON.stringify(updates) });
-            return { error: res.ok ? null : { message: await res.text() } };
+        const upd = {
+          eq(col, val) {
+            return req('PATCH', tableName, { [col]: 'eq.' + val }, updates, false);
           }
         };
+        return upd;
       },
 
       delete() {
         let _delFilters = {};
         const d = {
           eq(col, val) { _delFilters[col] = 'eq.' + val; return d; },
-          async then(resolve) {
-            const res = await fetch(buildUrl(tableName, _delFilters), { method: 'DELETE', headers });
-            resolve({ error: res.ok ? null : { message: await res.text() } });
+          then(resolve, reject) {
+            req('DELETE', tableName, _delFilters, null, false).then(resolve).catch(reject);
           }
         };
         return d;
@@ -4018,6 +4023,7 @@ function hubLogout(dashState) {
 // ── Data loader ───────────────────────────────────────────
 async function hubLoadAll() {
   const sb = getSB();
+  console.log('[HUB] Loading all data for season', HUB_SEASON);
   const [coachesRes, poolRes, draftRes, picksRes, rostersRes, tradesRes, waiversRes] = await Promise.all([
     sb.from('coaches').select('*').order('display_name'),
     sb.from('pokemon_pool').select('*').order('cost').order('name'),
@@ -4027,6 +4033,11 @@ async function hubLoadAll() {
     sb.from('trades').select('*').eq('season', HUB_SEASON).order('proposed_at', { ascending: false }),
     sb.from('waiver_claims').select('*').eq('season', HUB_SEASON).order('claimed_at', { ascending: false }),
   ]);
+  console.log('[HUB] coaches:', coachesRes.data?.length, coachesRes.error?.message);
+  console.log('[HUB] pool:', poolRes.data?.length, poolRes.error?.message);
+  console.log('[HUB] draft:', draftRes.data?.status, draftRes.error?.message);
+  console.log('[HUB] rosters:', rostersRes.data?.length, rostersRes.error?.message);
+  console.log('[HUB] trades:', tradesRes.data?.length, tradesRes.error?.message);
   hubState.coaches = coachesRes.data?.filter(c => !c.is_commissioner) || [];
   hubState.pool    = poolRes.data || [];
   hubState.draft   = draftRes.data;
@@ -4038,6 +4049,7 @@ async function hubLoadAll() {
     if (!hubState.rosters[r.coach_username]) hubState.rosters[r.coach_username] = [];
     hubState.rosters[r.coach_username].push(r);
   });
+  console.log('[HUB] Load complete. Coaches:', hubState.coaches.length, 'Rosters:', Object.keys(hubState.rosters).length);
 }
 
 async function hubAudit(action, details) {
@@ -4239,12 +4251,14 @@ function renderHubLoginModal(dashState, root) {
 function hubViewRosters(dashState) {
   const wrap = el('div', {});
 
+  const defaultCoach = hubState.user.is_commissioner ? 'ben' : hubState.user.username;
   const coachSel = el('select', {
     style:{ padding:'7px 10px', background:'var(--color-background-secondary)', border:'0.5px solid var(--color-border-secondary)', borderRadius:'var(--border-radius-md)', color:'var(--color-text-primary)', fontFamily:'var(--font-body)', fontSize:'13px', marginBottom:'1.25rem' }
   });
-  [[hubState.user.username, hubState.user.display_name + ' (me)'], ...hubState.coaches.filter(c=>c.username!==hubState.user.username).map(c=>[c.username,c.display_name])].forEach(([u,l]) => {
-    const o = el('option', { value:u }, l);
-    if (u === hubState.user.username) o.selected = true;
+  hubState.coaches.forEach(c => {
+    const label = c.username === hubState.user.username ? c.display_name + ' (me)' : c.display_name;
+    const o = el('option', { value:c.username }, label);
+    if (c.username === defaultCoach) o.selected = true;
     coachSel.appendChild(o);
   });
 
@@ -4317,7 +4331,7 @@ function hubViewRosters(dashState) {
   }
 
   coachSel.onchange = (e) => buildPanel(e.target.value);
-  buildPanel(hubState.user.username);
+  buildPanel(defaultCoach);
 
   wrap.appendChild(coachSel);
   wrap.appendChild(panel);
