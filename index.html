@@ -3883,7 +3883,7 @@ function renderPlayoffStats(state, seeds, bracket) {
 }
 // ============================================================
 // G-FORCE LEAGUE HUB — embedded module
-// Supabase config
+// No external SDK required — uses Supabase REST API directly
 // ============================================================
 const HUB_URL = 'https://zdwmtffbpgdqngvjyvid.supabase.co';
 const HUB_KEY = 'sb_publishable_oxNYSbfajq6FIC_D27xWEQ_0jIhCvx7';
@@ -3892,17 +3892,86 @@ const HUB_BUDGET = 100;
 const HUB_ROSTER_SIZE = 10;
 const HUB_ADMIN_PASS = 'gforce2026';
 
-let _sbClient = null;
+// ── Supabase REST client (no SDK needed) ──────────────────
+// Wraps fetch() to give a Supabase-like .from().select()... API
 function getSB() {
-  if (!_sbClient) {
-    if (!window.supabase) {
-      console.error('Supabase SDK not loaded. Make sure you are viewing this file from a web server, not file://');
-      hubToast('League Hub requires an internet connection to load.', 'error');
-      throw new Error('Supabase not loaded');
-    }
-    _sbClient = window.supabase.createClient(HUB_URL, HUB_KEY);
+  const headers = {
+    'apikey': HUB_KEY,
+    'Authorization': 'Bearer ' + HUB_KEY,
+    'Content-Type': 'application/json',
+    'Prefer': 'return=representation',
+  };
+
+  function buildUrl(table, params) {
+    const url = new URL(HUB_URL + '/rest/v1/' + table);
+    if (params) Object.entries(params).forEach(([k,v]) => url.searchParams.set(k, v));
+    return url.toString();
   }
-  return _sbClient;
+
+  function table(tableName) {
+    let _filters = {};
+    let _order = null;
+    let _limit = null;
+    let _single = false;
+    let _select = '*';
+
+    const q = {
+      select(cols) { _select = cols || '*'; return q; },
+      eq(col, val) { _filters[col] = 'eq.' + val; return q; },
+      order(col, opts) { _order = col + (opts?.ascending===false ? '.desc' : '.asc'); return q; },
+      limit(n) { _limit = n; return q; },
+      single() { _single = true; return q; },
+
+      async then(resolve, reject) {
+        try {
+          const params = { select: _select };
+          Object.assign(params, _filters);
+          if (_order) params.order = _order;
+          if (_limit) params.limit = _limit;
+          const h = { ...headers };
+          if (_single) h['Accept'] = 'application/vnd.pgrst.object+json';
+          const res = await fetch(buildUrl(tableName, params), { headers: h });
+          const data = res.ok ? await res.json() : null;
+          const error = res.ok ? null : { message: await res.text() };
+          resolve(_single ? { data, error } : { data: data || [], error });
+        } catch(e) { resolve({ data: null, error: { message: e.message } }); }
+      },
+
+      async insert(rows) {
+        const body = Array.isArray(rows) ? rows : [rows];
+        const res = await fetch(buildUrl(tableName), {
+          method: 'POST', headers, body: JSON.stringify(body)
+        });
+        const data = res.ok ? await res.json() : null;
+        return { data, error: res.ok ? null : { message: await res.text() } };
+      },
+
+      update(updates) {
+        return {
+          eq: async (col, val) => {
+            const url = buildUrl(tableName, { [col]: 'eq.' + val });
+            const res = await fetch(url, { method: 'PATCH', headers, body: JSON.stringify(updates) });
+            return { error: res.ok ? null : { message: await res.text() } };
+          }
+        };
+      },
+
+      delete() {
+        let _delFilters = {};
+        const d = {
+          eq(col, val) { _delFilters[col] = 'eq.' + val; return d; },
+          async then(resolve) {
+            const res = await fetch(buildUrl(tableName, _delFilters), { method: 'DELETE', headers });
+            resolve({ error: res.ok ? null : { message: await res.text() } });
+          }
+        };
+        return d;
+      }
+    };
+    return q;
+  }
+
+  return { from: table };
 }
 
 // Hub state (separate from dashboard state)
