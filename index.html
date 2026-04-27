@@ -3887,7 +3887,7 @@ function renderPlayoffStats(state, seeds, bracket) {
 // ============================================================
 const HUB_URL = 'https://zdwmtffbpgdqngvjyvid.supabase.co';
 const HUB_KEY = 'sb_publishable_oxNYSbfajq6FIC_D27xWEQ_0jIhCvx7';
-const HUB_SEASON = 2027;
+const HUB_SEASON = 2026;
 const HUB_BUDGET = 100;
 const HUB_ROSTER_SIZE = 10;
 const HUB_ADMIN_PASS = 'gforce2026';
@@ -4170,6 +4170,7 @@ function renderHubMode(dashState, root) {
 
 // ── Login modal ───────────────────────────────────────────
 function renderHubLoginModal(dashState, root) {
+  console.log('[HUB] renderHubLoginModal called');
   const backdrop = el('div', {
     style:{ position:'fixed', inset:'0', background:'rgba(0,0,0,0.6)', zIndex:'500', display:'flex', alignItems:'center', justifyContent:'center' }
   });
@@ -4269,7 +4270,7 @@ function hubViewRosters(dashState) {
         el('div', { style:{ fontSize:'12px', color:'var(--color-text-tertiary)', marginTop:'3px' } }, coach.team_name || ''),
       ]),
       el('div', { style:{ textAlign:'right' } }, [
-        el('div', { style:{ fontFamily:'var(--font-mono)', fontSize:'24px', fontWeight:'600', color:fillColor } }, spent + el('span',{style:{fontSize:'13px',color:'var(--color-text-secondary)'}}, ' / '+HUB_BUDGET+' pts').outerHTML),
+        el('div', { style:{ fontFamily:'var(--font-mono)', fontSize:'24px', fontWeight:'600', color:fillColor } }, [String(spent), el('span',{style:{fontSize:'13px',color:'var(--color-text-secondary)'}}, ' / '+HUB_BUDGET+' pts')]),
         el('div', { style:{ fontSize:'11px', color:'var(--color-text-tertiary)', marginTop:'3px' } }, remaining+' pts left  •  '+roster.length+'/'+HUB_ROSTER_SIZE+' Pokémon')
       ])
     ]));
@@ -4557,11 +4558,17 @@ function hubDraftAdminPanel(dashState) {
 function hubViewTrades(dashState) {
   const wrap = el('div', {});
 
+  // 2026 trade deadline passed notice
+  const deadlineNotice = HUB_SEASON === 2026 ? el('div', {
+    style: { background:'rgba(248,113,113,0.1)', border:'0.5px solid rgba(248,113,113,0.4)', borderRadius:'var(--border-radius-md)', padding:'10px 14px', marginBottom:'1rem', fontSize:'13px', color:'#f87171' }
+  }, '🔒 Trade deadline has passed for the 2026 season (after Week 5). Rosters are locked.') : null;
+
   const proposeBtn = el('button', {
     onclick: () => hubShowTradeModal(dashState, null),
     style:{ padding:'8px 16px', background:'#f0c040', border:'none', borderRadius:'var(--border-radius-md)', cursor:'pointer', fontSize:'13px', fontWeight:'700', color:'#000', marginBottom:'1.25rem' }
   }, '📤 Propose Trade');
 
+  if (deadlineNotice) wrap.appendChild(deadlineNotice);
   wrap.appendChild(el('div', { style:{ display:'flex', justifyContent:'flex-end', marginBottom:'1.25rem' } }, proposeBtn));
 
   // Pending for me
@@ -4739,6 +4746,7 @@ function hubShowTradeModal(dashState, targetUsername) {
           const offered = [...offerList.querySelectorAll('input:checked')].map(cb=>cb.value);
           const requested = [...requestList.querySelectorAll('input:checked')].map(cb=>cb.value);
           if (!offered.length||!requested.length) { errMsg.textContent='Select at least one Pokémon on each side.'; return; }
+          if (HUB_SEASON === 2026) { hubToast('Trade deadline has passed for the 2026 season.','error'); return; }
           const { error } = await getSB().from('trades').insert({ season:HUB_SEASON, proposer:hubState.user.username, receiver, offered_pokemon:offered, requested_pokemon:requested, proposer_note:noteInput.value.trim()||null });
           if (error) { errMsg.textContent='Error: '+error.message; return; }
           await hubAudit('TRADE_PROPOSED', { receiver, offered, requested });
@@ -5384,7 +5392,14 @@ function renderRegularSeasonMode(state, root) {
           style: { display:'inline-flex', alignItems:'center', gap:'6px', padding:'7px 14px', fontSize:'12px', fontWeight:'700', background:'rgba(240,192,64,0.15)', color:'#f0c040', border:'0.5px solid rgba(240,192,64,0.4)', borderRadius:'var(--border-radius-md)', cursor:'pointer', transition:'all 0.15s' }
         }, '⚡ League Hub') :
         el('button', {
-          onclick: () => { state.view='hub-login'; render(state); },
+          onclick: () => {
+            try {
+              state.view='hub-login';
+              render(state);
+            } catch(e) {
+              alert('Hub error: ' + e.message + '\n\nStack: ' + e.stack?.slice(0,300));
+            }
+          },
           style: { display:'inline-flex', alignItems:'center', gap:'6px', padding:'7px 14px', fontSize:'12px', fontWeight:'600', background:'var(--color-background-secondary)', color:'var(--color-text-secondary)', border:'0.5px solid var(--color-border-tertiary)', borderRadius:'var(--border-radius-md)', cursor:'pointer', transition:'all 0.15s' }
         }, '⚡ League Hub'),
         searchBtn, themeBtn
@@ -5413,10 +5428,11 @@ function renderRegularSeasonMode(state, root) {
   else if (state.view === 'h2h')          content = viewHeadToHead(statState);
   else if (state.view === 'query')        content = viewCustomQuery(statState);
   else if (state.view === 'turnlog')      content = viewTurnLog(statState);
+  else                                    content = viewStandings(statState);
 
   root.appendChild(header);
   root.appendChild(tabBar);
-  root.appendChild(content);
+  if (content) root.appendChild(content);
 }
 
 function init() {
