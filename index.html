@@ -3890,7 +3890,7 @@ const HUB_KEY = 'sb_publishable_oxNYSbfajq6FIC_D27xWEQ_0jIhCvx7';
 const HUB_SEASON = 2026;
 const HUB_BUDGET = 100;
 const HUB_ROSTER_SIZE = 10;
-const HUB_ADMIN_PASS = 'gforce2026';
+const HUB_ADMIN_PASS = 'ben';
 
 // ── Supabase REST client (no SDK needed) ──────────────────
 // Wraps fetch() to give a Supabase-like .from().select()... API
@@ -3996,21 +3996,11 @@ const hubState = {
 // ── Auth ──────────────────────────────────────────────────
 async function hubLogin(username, password) {
   const sb = getSB();
-
-  // Commissioner master password bypasses DB
-  if (password === HUB_ADMIN_PASS) {
-    const { data: commData } = await sb.from('coaches').select('*').eq('is_commissioner', true).single();
-    hubState.user = commData || {
-      username: 'commissioner', display_name: 'Commissioner',
-      team_name: 'Admin', is_commissioner: true
-    };
-    return { ok: true };
-  }
-
-  const { data, error } = await sb.from('coaches').select('*').eq('username', username.toLowerCase()).single();
-  if (error || !data) return { ok: false, msg: 'Username not found.' };
-  if (data.password_hash !== password) return { ok: false, msg: 'Incorrect password.' };
-  hubState.user = data;
+  const loginResult = await sb.from('coaches').select('*').eq('username', username.toLowerCase()).single();
+  console.log('[HUB] Login:', username, loginResult.error?.message || 'ok');
+  if (loginResult.error || !loginResult.data) return { ok: false, msg: 'Username not found.' };
+  if (loginResult.data.password_hash !== password) return { ok: false, msg: 'Incorrect password.' };
+  hubState.user = loginResult.data;
   return { ok: true };
 }
 
